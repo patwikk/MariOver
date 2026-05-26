@@ -273,10 +273,29 @@ def level_to_dict(level, name: str = "") -> dict:
     if isinstance(level_name, (bytes, bytearray)):
         level_name = level_name.decode("utf-16-le", errors="replace")
     level_name = level_name.strip("\x00").strip()
+
+    # start_y / goal_y are raw tile rows (0 = bottom).
+    # goal_x in the header is a raw pixel coord — we don't use it directly;
+    # the viewer reads goal_x from the goal_ground object in the objects array.
+    start_y = int(getattr(level, "start_y", 0))
+
+    # gamestyle and theme are available from the kaitai struct.
+    gamestyle = str(getattr(level, "gamestyle", "")).lower()   # e.g. "gamestyle.smb1"
+    theme     = str(level.overworld.theme).lower()             # e.g. "theme.castle"
+    # strip enum prefix so callers get plain strings like "smb1", "castle"
+    if "." in gamestyle:
+        gamestyle = gamestyle.split(".")[-1]
+    if "." in theme:
+        theme = theme.split(".")[-1]
+
     return {
-        "name": level_name,
-        "objects": ow_objs,
-        "ground":  ow_gnd,
+        "name":      level_name,
+        "gamestyle": gamestyle,   # smb1 | smb3 | smw | nsmbw | sm3dw
+        "theme":     theme,       # overworld | underground | castle | airship |
+                                  # underwater | ghost_house | snow | desert | sky | forest
+        "start_y":   start_y,     # tile row of spawn (game coords, 0 = bottom)
+        "objects":   ow_objs,
+        "ground":    ow_gnd,
         "subworld_objects": sw_objs,
         "subworld_ground":  sw_gnd,
     }
@@ -525,9 +544,138 @@ class MM2Viewer(tk.Tk):
                                             text=char, fill="white",
                                             font=("Courier", max(ts // 2, 7), "bold"))
 
+        # ----------------------------------------------------------------
+        # START GROUND  —  7 tiles wide, fills from row 0 up to start_y
+        # (the game enforces this; no objects can be placed in this zone)
+        # ----------------------------------------------------------------
+        START_W    = 7
+        start_ygame = lvl.get("start_y", 1)
+        ground_color = GROUND_COLOR   # same brown used for regular ground
+
+        for sc_col in range(START_W):
+            if sc_col >= max_tx:
+                continue
+            # fill every row from 0 up to start_y-1 (start_y is where Mario stands)
+            for row in range(0, start_ygame):
+                if row >= max_ty:
+                    continue
+                row_canvas = max_ty - 1 - row
+                x0 = sc_col * ts
+                y0 = row_canvas * ts
+                self.canvas.create_rectangle(x0, y0, x0 + ts, y0 + ts,
+                                             fill=ground_color, outline="#5A3E00")
+                if show_lbl and row == start_ygame - 1:
+                    # top surface label
+                    self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
+                                            text="#", fill="#EDD090",
+                                            font=("Courier", max(ts // 2, 7), "bold"))
+
+        # spawn marker: green S on column 3 (centre of 7-wide zone), at start_y+1
+        spawn_label_row = start_ygame
+        if 3 < max_tx and spawn_label_row < max_ty:
+            sx = 3 * ts
+            sy = (max_ty - 1 - spawn_label_row) * ts
+            self.canvas.create_rectangle(sx, sy, sx + ts, sy + ts,
+                                         fill="#00CC00", outline="#006600")
+            self.canvas.create_text(sx + ts // 2, sy + ts // 2,
+                                    text="S", fill="white",
+                                    font=("Courier", max(ts // 2, 7), "bold"))
+
+        # ----------------------------------------------------------------
+        # GOAL — find goal_ground object for correct X; fall back to
+        # goal object if goal_ground not present.
+        # goal_ground object X is already in pixel coords → divide by 160.
+        # ----------------------------------------------------------------
+        GOAL_W = 10   # goal ground is always 10 tiles wide
+
+        goal_base_col  = None
+        goal_base_ygame = None
+        for obj in objects:
+            id_str = obj_id_to_str(obj["id"])
+            if id_str == "goal_ground":
+                goal_base_col   = obj["x"] // self.TILE_PX
+                goal_base_ygame = obj["y"] // self.TILE_PX
+                break
+        if goal_base_col is None:
+            for obj in objects:
+                id_str = obj_id_to_str(obj["id"])
+                if id_str == "goal":
+                    goal_base_col   = obj["x"] // self.TILE_PX
+                    goal_base_ygame = obj["y"] // self.TILE_PX
+                    break
+
+        theme     = lvl.get("theme",     "overworld")
+        gamestyle = lvl.get("gamestyle", "smb1")
+
+        # Castle theme uses axe+bridge EXCEPT in SM3DW style
+        is_castle_axe = (theme == "castle" and gamestyle != "sm3dw")
+
+        if goal_base_col is not None and goal_base_ygame is not None:
+
+            # ---- goal ground: 10 tiles wide, filled from row 0 to goal_base_ygame ----
+            for gc_col in range(GOAL_W):
+                col_abs = goal_base_col + gc_col
+                if col_abs >= max_tx:
+                    continue
+                for row in range(0, goal_base_ygame + 1):
+                    if row >= max_ty:
+                        continue
+                    row_canvas = max_ty - 1 - row
+                    x0 = col_abs * ts
+                    y0 = row_canvas * ts
+                    self.canvas.create_rectangle(x0, y0, x0 + ts, y0 + ts,
+                                                 fill=ground_color, outline="#5A3E00")
+                    if show_lbl and row == goal_base_ygame:
+                        self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
+                                                text="#", fill="#EDD090",
+                                                font=("Courier", max(ts // 2, 7), "bold"))
+
+            top_row = goal_base_ygame + 1   # row just above goal ground
+
+            if is_castle_axe:
+                # Castle (non-SM3DW): 14-tile bridge to the LEFT of goal_base_col,
+                # then axe at goal_base_col.
+                BRIDGE_W = 14
+                bridge_row_canvas = max_ty - 1 - goal_base_ygame  # bridge sits AT goal_y
+                for b in range(BRIDGE_W):
+                    bc = goal_base_col - BRIDGE_W + b
+                    if bc < 0 or bc >= max_tx:
+                        continue
+                    bx = bc * ts
+                    by = bridge_row_canvas * ts
+                    self.canvas.create_rectangle(bx, by, bx + ts, by + ts,
+                                                 fill="#8B4513", outline="#5A2E00")
+                    if show_lbl:
+                        self.canvas.create_text(bx + ts // 2, by + ts // 2,
+                                                text="=", fill="#DDAA88",
+                                                font=("Courier", max(ts // 2, 7), "bold"))
+                # axe marker
+                if goal_base_col < max_tx and top_row < max_ty:
+                    ax0 = goal_base_col * ts
+                    ay0 = (max_ty - 1 - top_row) * ts
+                    self.canvas.create_rectangle(ax0, ay0, ax0 + ts, ay0 + ts,
+                                                 fill="#DD0000", outline="#880000")
+                    self.canvas.create_text(ax0 + ts // 2, ay0 + ts // 2,
+                                            text="X", fill="white",
+                                            font=("Courier", max(ts // 2, 7), "bold"))
+            else:
+                # Flagpole: 1-tile wide marker at centre of goal ground (col +5)
+                flag_col = goal_base_col + 5
+                if flag_col < max_tx and top_row < max_ty:
+                    fx0 = flag_col * ts
+                    fy0 = (max_ty - 1 - top_row) * ts
+                    self.canvas.create_rectangle(fx0, fy0, fx0 + ts, fy0 + ts,
+                                                 fill="#DD0000", outline="#880000")
+                    self.canvas.create_text(fx0 + ts // 2, fy0 + ts // 2,
+                                            text="G", fill="white",
+                                            font=("Courier", max(ts // 2, 7), "bold"))
+
         self.info_lbl.config(
             text=f"[{self.current_idx + 1}/{len(self.levels)}]  {name}  |  "
+                 f"style={gamestyle}  theme={theme}  |  "
                  f"{len(objects)} objects  {len(ground)} ground tiles  |  "
+                 f"S=(0,{start_ygame})  "
+                 f"G=({goal_base_col},{goal_base_ygame})  |  "
                  f"grid {max_tx}x{max_ty}")
 
     # --------------------------------------------------------------- tooltip --
@@ -552,9 +700,19 @@ class MM2Viewer(tk.Tk):
         row_game   = max_ty - 1 - row_canvas
 
         hits = []
+        start_ygame_tip = lvl.get("start_y", 1)
+        # start ground zone (cols 0-6, rows 0 to start_y)
+        if col < 7 and 0 <= row_game <= start_ygame_tip:
+            hits.append(f"start ground  tile({col},{row_game})")
+        # spawn marker row
+        if col == 3 and row_game == start_ygame_tip + 1:
+            hits.append(f"SPAWN  tile({col},{row_game})")
+        # goal objects
         for o in lvl.get("objects", []):
+            id_str = obj_id_to_str(o["id"])
             if o["x"] // self.TILE_PX == col and o["y"] // self.TILE_PX == row_game:
-                hits.append(f"obj: {obj_id_to_str(o['id'])}  px({o['x']},{o['y']})")
+                prefix = "GOAL " if id_str in ("goal", "goal_ground") else "obj"
+                hits.append(f"{prefix}: {id_str}  px({o['x']},{o['y']})")
         for g in lvl.get("ground", []):
             if g["x"] == col and g["y"] == row_game:
                 hits.append(f"ground  tile={g.get('tile_id','?')}  bg={g.get('background_id','?')}  @({col},{row_game})")
