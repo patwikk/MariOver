@@ -1,0 +1,141 @@
+MM2 ASCII Character Guide
+==========================
+Convention: UPPERCASE = solid / dangerous
+            lowercase = passable / collectible
+            -  = empty air
+            #  = ground tile
+
+----------------------------------------------------------------------
+TERRAIN
+----------------------------------------------------------------------
+#   ground / goal_ground / starting_brick (all solid floor)
+B   block (brick)
+H   hard_block
+?   question_block
+h   hidden_block
+N   note_block
+D   donut_block
+I   ice_block
+P   p_block
+O   on_off_block
+.   dotted_line_block
+*   blinking_block
+^   spike_block / spikes / spike_top / one_way
+C   crate
+S   stone
+T   tree
+/   slight_slope / seesaw
+\   steep_slope
+=   castle_bridge / semisolid_platform / bridge
+
+----------------------------------------------------------------------
+PIPES / DOORS / WARPS
+----------------------------------------------------------------------
+|   pipe / fire_bar / skewer / vine
+d   door / donut
+W   warp_box
+k   key
+f   checkpoint_flag / fire_flower
+F   goal (flagpole — non-castle)
+c   clear_pipe / coin (context-dependent)
+
+----------------------------------------------------------------------
+ENEMIES
+----------------------------------------------------------------------
+g   goomba
+K   koopa
+P   piranha_flower
+H   hammer_bro
+T   thwomp
+o   bob_omb / spike_ball / cannon
+s   spiny
+b   buzzy_beetle
+L   lakitu
+l   lakitu_cloud
+Z   banzai_bill
+V   bullet_bill_blaster
+m   magikoopa
+u   boo
+X   bowser  (also: axe goal in castle levels)
+x   bowser_jr
+@   chain_chomp / twister / player
+~   cheep_cheep / snake_block / water_marker
+q   blooper
+w   wiggler
+y   pokey
+e   piranha_creeper
+r   porkupuffer
+%   fish_bone
+&   lava_bubble
+R   rocky_wrench / reel_camera
+,   muncher
+a   ant_trooper
+n   monty_mole
+M   mechakoopa
+!   boom_boom / exclamation_block
+9   dry_bones
+j   skipsqueak
++   cinobio / cinobic / one_up
+;   stingby
+A   angry_sun
+v   charvaargh
+[   bully
+1   lemmy
+2   morton
+3   larry
+4   wendy
+5   iggy
+6   roy
+7   ludwig
+
+----------------------------------------------------------------------
+ITEMS / POWER-UPS
+----------------------------------------------------------------------
+c   coin
+$   red_coin / big_coin
++   one_up / cinobio / cinobic
+f   fire_flower / checkpoint_flag
+*   super_star / blinking_block
+p   super_mushroom / big_mushroom / smb2_mushroom
+t   super_hammer
+z   p_switch
+i   pow / icicle
+J   spring
+G   shoe_goomba (worn) / flagpole goal marker
+]   power-up boxes (cannon / propeller / goomba / bullet / red_pow)
+
+----------------------------------------------------------------------
+PLATFORMS / MOVING
+----------------------------------------------------------------------
+-   lift / mushroom_platform / lava_lift / sprint_platform /
+    half_collision_platform
+=   semisolid_platform / bridge / castle_bridge
+~   snake_block / cheep_cheep / water_marker
+:   track / track_block
+_   conveyor_belt / fast_conveyor_belt
+/   seesaw / slight_slope
+U   swinging_claw
+E   on_off_trampoline / mushroom_trampoline
+Q   jumping_machine
+
+----------------------------------------------------------------------
+HAZARDS
+----------------------------------------------------------------------
+|   fire_bar / skewer / pipe / vine
+O   saw
+B   burner
+^   spikes / spike_top / spike_block / one_way
+o   spike_ball / bob_omb / cannon
+i   icicle / pow
+@   twister / chain_chomp / player
+(   cloud
+
+----------------------------------------------------------------------
+START / GOAL  (added by viewer, present in ASCII export)
+----------------------------------------------------------------------
+#   start ground — columns 0-6, filled from row 0 up to start_y-1
+S   spawn point  — column 3 at start_y (where Mario appears)
+G   flagpole     — non-castle goal marker
+X   axe          — castle goal marker (non-SM3DW styles)
+=   castle bridge tiles (14 wide, to the left of axe)
+----------------------------------------------------------------------
