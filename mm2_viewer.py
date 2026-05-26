@@ -237,6 +237,53 @@ OBJ_META = {
 GROUND_COLOR = "#8B6914"
 GROUND_CHAR  = "#"
 
+# ---------------------------------------------------------------------------
+# ASCII map — obj name → single character
+# ---------------------------------------------------------------------------
+ASCII_MAP = {
+    "ground":"#","_ground_tile":"#","block":"B","hard_block":"H",
+    "question_block":"?","hidden_block":"h","note_block":"N",
+    "donut_block":"D","ice_block":"I","p_block":"P","on_off_block":"O",
+    "dotted_line_block":".","blinking_block":"*","spike_block":"^",
+    "crate":"C","stone":"S","goal_ground":"#","starting_brick":"#",
+    "castle_bridge":"=","tree":"T","slight_slope":"/","steep_slope":"\\",
+    "pipe":"|","door":"d","warp_box":"W","key":"k",
+    "checkpoint_flag":"f","goal":"F","clear_pipe":"c",
+    "goomba":"g","koopa":"K","piranha_flower":"P","hammer_bro":"H",
+    "thwomp":"T","bob_omb":"o","spiny":"s","buzzy_beetle":"b",
+    "lakitu":"L","lakitu_cloud":"l","banzai_bill":"Z",
+    "bullet_bill_blaster":"V","magikoopa":"m","spike_top":"^",
+    "boo":"u","bowser":"X","bowser_jr":"x","chain_chomp":"@",
+    "cheep_cheep":"~","blooper":"q","wiggler":"w","pokey":"y",
+    "piranha_creeper":"e","porkupuffer":"r","fish_bone":"%",
+    "lava_bubble":"&","rocky_wrench":"R","muncher":",",
+    "ant_trooper":"a","monty_mole":"n","mechakoopa":"M",
+    "boom_boom":"!","dry_bones":"9","skipsqueak":"j",
+    "cinobio":"+","cinobic":"+","stingby":";","angry_sun":"A",
+    "charvaargh":"v","bully":"[","lemmy":"1","morton":"2",
+    "larry":"3","wendy":"4","iggy":"5","roy":"6","ludwig":"7",
+    "coin":"c","red_coin":"$","big_coin":"$","one_up":"+",
+    "fire_flower":"f","super_star":"*","super_mushroom":"p",
+    "big_mushroom":"p","smb2_mushroom":"p","super_hammer":"t",
+    "p_switch":"z","pow":"i","spring":"J","shoe_goomba":"G",
+    "cannon_box":"]","propeller_box":"]","goomba_mask":"]",
+    "bullet_bill_mask":"]","red_pow_box":"]",
+    "lift":"-","mushroom_platform":"-","semisolid_platform":"=",
+    "bridge":"=","lava_lift":"-","snake_block":"~","track_block":":",
+    "conveyor_belt":"_","fast_conveyor_belt":"_","sprint_platform":"-",
+    "seesaw":"/","swinging_claw":"U","on_off_trampoline":"E",
+    "mushroom_trampoline":"E","jumping_machine":"Q",
+    "half_collision_platform":"-","donut":"d",
+    "fire_bar":"|","saw":"O","burner":"B","spikes":"^",
+    "spike_ball":"o","skewer":"|","twister":"@","icicle":"i",
+    "cloud":"(","vine":"`","water_marker":"~","arrow":">",
+    "one_way":"^","reel_camera":"R","sound_effect":".",
+    "player":"@","clown_car":"C","koopa_car":"C","track":":",
+    "starting_arrow":">","cannon":"o","exclamation_block":"!",
+    "_unknown":"?",
+}
+
+
 CAT_COLORS = {
     CAT_TERRAIN:  "#C8A050",
     CAT_ENEMY:    "#CC4444",
@@ -278,6 +325,9 @@ def level_to_dict(level, name: str = "") -> dict:
     goal_x  = int(getattr(level, "goal_x",  0))
     goal_y  = int(getattr(level, "goal_y",  0))
 
+    # boundary_right is the actual right edge of this level in pixels
+    boundary_right = int(level.overworld.boundary_right)
+
     gamestyle = str(getattr(level, "gamestyle", "")).lower()
     theme     = str(level.overworld.theme).lower()
     if "." in gamestyle:
@@ -295,14 +345,15 @@ def level_to_dict(level, name: str = "") -> dict:
     # --- END DEBUG ---
 
     return {
-        "name":      level_name,
-        "gamestyle": gamestyle,
-        "theme":     theme,
-        "start_y":   start_y,
-        "goal_x_raw": goal_x,   # raw header pixel value, kept for debug
-        "goal_y_raw": goal_y,
-        "objects":   ow_objs,
-        "ground":    ow_gnd,
+        "name":           level_name,
+        "gamestyle":      gamestyle,
+        "theme":          theme,
+        "start_y":        start_y,
+        "goal_x_raw":     goal_x,
+        "goal_y_raw":     goal_y,
+        "boundary_right": boundary_right,
+        "objects":        ow_objs,
+        "ground":         ow_gnd,
         "subworld_objects": sw_objs,
         "subworld_ground":  sw_gnd,
     }
@@ -333,6 +384,7 @@ class MM2Viewer(tk.Tk):
         self.show_objects = tk.BooleanVar(value=True)
         self.show_grid    = tk.BooleanVar(value=True)
         self.show_labels  = tk.BooleanVar(value=True)
+        self.ascii_mode   = tk.BooleanVar(value=False)
         self._cat_vars    = {}   # cat → BooleanVar
         self._tooltip_win = None
 
@@ -358,6 +410,11 @@ class MM2Viewer(tk.Tk):
         self.zoom_var = tk.IntVar(value=16)
         tk.Scale(tb, from_=6, to=40, orient=tk.HORIZONTAL, variable=self.zoom_var,
                  command=lambda _: self._on_zoom(), showvalue=True, length=120).pack(side=tk.LEFT)
+
+        ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        tk.Checkbutton(tb, text="ASCII mode", variable=self.ascii_mode,
+                       command=self._redraw).pack(side=tk.LEFT, padx=4)
+        tk.Button(tb, text="Export ASCII", command=self._export_ascii).pack(side=tk.LEFT, padx=2)
 
         # category filter bar
         fb = tk.Frame(self)
@@ -477,6 +534,10 @@ class MM2Viewer(tk.Tk):
             self.info_lbl.config(text="No level loaded")
             return
 
+        if self.ascii_mode.get():
+            self._render_ascii()
+            return
+
         lvl     = self.levels[self.current_idx]
         objects = lvl.get("objects", [])
         ground  = lvl.get("ground",  [])
@@ -493,8 +554,11 @@ class MM2Viewer(tk.Tk):
         for g in ground:
             max_tx = max(max_tx, g["x"] + 2)
             max_ty = max(max_ty, g["y"] + 2)
+        br = lvl.get("boundary_right", 0)
+        boundary_cols = (br // 16) if br > 0 else 0
         max_tx = min(max_tx, self.MAX_COLS) - 1
         max_ty = min(max_ty, self.MAX_ROWS)
+        print(f"DEBUG max_tx={max_tx}  boundary_right={br}  boundary_cols={boundary_cols}")
 
         # compute theme/gamestyle early — needed for goal X and canvas width
         theme     = lvl.get("theme",     "overworld")
@@ -502,15 +566,19 @@ class MM2Viewer(tk.Tk):
         is_castle_axe = (theme == "castle" and gamestyle != "sm3dw")
         print(f"DEBUG _redraw: theme={repr(theme)}  gamestyle={repr(gamestyle)}  is_castle_axe={is_castle_axe}")
 
-        # goal X: for non-castle max_tx - 9 puts flagpole at the right place,
-        # goal ground extends 10 tiles right so canvas must expand to show it.
-        # Castle anchors differently — axe sits at max_tx - 10.
+        # Goal anchors to boundary_cols (true right edge). Fall back to max_tx.
+        anchor = boundary_cols if boundary_cols > 0 else max_tx
+
         if is_castle_axe:
-            goal_base_col = max_tx - 10
+            goal_base_col = anchor - 10
+            max_tx = max(max_tx, goal_base_col + 2)
         else:
-            goal_base_col = max_tx - 9
-            max_tx = goal_base_col + 11  # expand canvas: 10 goal ground + 1 margin
+            goal_base_col = anchor - 10
+            max_tx = goal_base_col + 11
             max_ty -= 1
+
+
+        
 
         W = max_tx * ts
         H = max_ty * ts
@@ -674,7 +742,113 @@ class MM2Viewer(tk.Tk):
                  f"G=({goal_base_col},{goal_base_ygame})  |  "
                  f"grid {max_tx}x{max_ty}")
 
+    # ----------------------------------------------------------- ASCII mode --
+
+    def _build_ascii_grid(self):
+        lvl     = self.levels[self.current_idx]
+        objects = lvl.get("objects", [])
+        ground  = lvl.get("ground",  [])
+        theme     = lvl.get("theme",     "overworld")
+        gamestyle = lvl.get("gamestyle", "smb1")
+        is_castle_axe = (theme == "castle" and gamestyle != "sm3dw")
+
+        max_tx = 40
+        max_ty = 20
+        for o in objects:
+            max_tx = max(max_tx, o["x"] // 160 + 2)
+            max_ty = max(max_ty, o["y"] // 160 + 2)
+        for g in ground:
+            max_tx = max(max_tx, g["x"] + 2)
+            max_ty = max(max_ty, g["y"] + 2)
+        br = lvl.get("boundary_right", 0)
+        boundary_cols = (br // 16) if br > 0 else 0
+        max_tx = min(max_tx, 240) - 1
+        max_ty = min(max_ty, 28)
+        anchor = boundary_cols if boundary_cols > 0 else max_tx
+        if is_castle_axe:
+            goal_base_col = anchor - 10
+            max_tx = max(max_tx, goal_base_col + 2)
+        else:
+            goal_base_col = anchor - 10
+            max_tx = goal_base_col + 11
+            max_ty -= 1
+
+        start_ygame     = lvl.get("start_y", 1)
+        goal_base_ygame = int(lvl.get("goal_y_raw", 0))
+        GOAL_W          = 11 if not is_castle_axe else 10
+
+        grid = [["-"] * max_tx for _ in range(max_ty)]
+
+        def set_cell(col, row_game, ch):
+            if 0 <= col < max_tx and 0 <= row_game < max_ty:
+                grid[max_ty - 1 - row_game][col] = ch
+
+        for g in ground:
+            set_cell(g["x"], g["y"], "#")
+        for obj in objects:
+            ch = ASCII_MAP.get(obj_id_to_str(obj["id"]), "?")
+            set_cell(obj["x"] // 160, obj["y"] // 160, ch)
+        for col in range(7):
+            for row in range(0, start_ygame):
+                set_cell(col, row, "#")
+        set_cell(3, start_ygame, "S")
+        for gc in range(GOAL_W):
+            for row in range(0, goal_base_ygame):
+                set_cell(goal_base_col + gc, row, "#")
+        if is_castle_axe:
+            for b in range(14):
+                set_cell(goal_base_col - 14 + b, goal_base_ygame - 1, "=")
+            set_cell(goal_base_col, goal_base_ygame, "X")
+        else:
+            set_cell(goal_base_col + 1, goal_base_ygame, "G")
+
+        return grid, max_tx, max_ty
+
+    def _render_ascii(self):
+        lvl  = self.levels[self.current_idx]
+        name = lvl.get("name", f"Level {self.current_idx + 1}")
+        grid, max_tx, max_ty = self._build_ascii_grid()
+        ts   = self.tile_size
+        font = ("Courier", max(ts - 2, 7), "bold")
+        W, H = max_tx * ts, max_ty * ts
+        self.canvas.config(scrollregion=(0, 0, W, H))
+        self.canvas.create_rectangle(0, 0, W, H, fill="#111111", outline="")
+        for row_canvas, row_chars in enumerate(grid):
+            for col, ch in enumerate(row_chars):
+                x0, y0 = col * ts, row_canvas * ts
+                if ch == "#":   bg = "#8B6914"
+                elif ch == "-": bg = "#111111"
+                elif ch == "S": bg = "#00AA00"
+                elif ch in ("G","X","F"): bg = "#CC0000"
+                elif ch == "=": bg = "#7B3F10"
+                else:           bg = "#222222"
+                self.canvas.create_rectangle(x0, y0, x0+ts, y0+ts, fill=bg, outline="")
+                if ts >= 8:
+                    fg = "#EEEEEE" if ch != "-" else "#333333"
+                    self.canvas.create_text(x0+ts//2, y0+ts//2, text=ch, fill=fg, font=font)
+        self.info_lbl.config(text=f"[{self.current_idx+1}/{len(self.levels)}]  {name}  [ASCII]  grid {max_tx}x{max_ty}")
+
+    def _export_ascii(self):
+        if not self.levels:
+            messagebox.showwarning("No level", "Load a level first.")
+            return
+        lvl  = self.levels[self.current_idx]
+        name = lvl.get("name", f"level_{self.current_idx+1}")
+        grid, _, _ = self._build_ascii_grid()
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files","*.txt"),("All","*.*")],
+            title="Export ASCII level",
+            initialfile=f"{name}.txt")
+        if not path:
+            return
+        with open(path, "w") as f:
+            for row in grid:
+                f.write("".join(row) + "\n")
+        messagebox.showinfo("Exported", f"Saved to {path}")
+
     # --------------------------------------------------------------- tooltip --
+
     def _on_hover(self, event):
         if not self.levels:
             return
