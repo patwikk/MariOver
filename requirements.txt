@@ -28,4 +28,5 @@ kaitaistruct==0.10
 Pillow==11.0.0
 psutil==6.1.0
 matplotlib==3.9.2
+datasets
 git+https://github.com/kinnay/NintendoClients@master#egg=nintendoclients
