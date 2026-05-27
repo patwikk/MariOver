@@ -142,10 +142,11 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         # 3.  Mutable state shared across callbacks                           #
         # ------------------------------------------------------------------ #
         state = {
-            "step":           0,
-            "wave_snap":      None,
-            "backtrack_count": 0,
-            "attempt":         1,
+            "step":                   0,
+            "wave_snap":              None,
+            "backtrack_count":        0,   # total across all attempts
+            "attempt_backtrack_count": 0,  # reset each attempt
+            "attempt":                1,
         }
 
         def _wave_to_rows(w):
@@ -167,17 +168,36 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             return rows
 
         def on_backtrack():
-            state["backtrack_count"] += 1
-            bt_n = state["backtrack_count"]
-            if bt_n <= 20 or bt_n % 50 == 0:
+            state["backtrack_count"]         += 1
+            state["attempt_backtrack_count"] += 1
+            bt_n      = state["backtrack_count"]
+            bt_attempt = state["attempt_backtrack_count"]
+
+            # Log first 20, then every 100 within this attempt
+            if bt_n <= 20 or bt_attempt % 100 == 0:
                 snap = state["wave_snap"]
                 collapsed = 0
                 if snap is not None:
                     collapsed = int(np.sum(np.sum(snap, axis=0) == 1))
                 pct = round(collapsed / max(total_cells, 1) * 100, 1)
-                _log(f"[WFC Worker]   ↩ Backtrack #{bt_n}  "
-                     f"(attempt {state['attempt']}/{attempt_limit})  "
+                _log(f"[WFC Worker]   ↩ Backtrack #{bt_n} "
+                     f"(#{bt_attempt} this attempt, "
+                     f"attempt {state['attempt']}/{attempt_limit})  "
                      f"{collapsed}/{total_cells} cells ({pct}%) still collapsed")
+
+            # Per-attempt backtrack cap: if we've been spinning without making
+            # progress, abort this attempt and restart fresh.
+            # Cap = 5× the number of cells (generous for backtracking mode,
+            # but prevents infinite loops from bad heuristic combinations).
+            bt_cap = total_cells * 5
+            if bt_attempt >= bt_cap:
+                _log(f"[WFC Worker] ⚠ Backtrack cap hit "
+                     f"({bt_attempt} backtracks this attempt, cap={bt_cap})  "
+                     f"— forcing fresh restart")
+                raise wfc_control.Contradiction(
+                    f"Backtrack cap {bt_cap} exceeded on attempt "
+                    f"{state['attempt']} — restarting fresh"
+                )
 
         def on_choice(row, col, pattern_id):
             state["step"] += 1
@@ -225,6 +245,7 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         solution = None
         for attempt in range(1, attempt_limit + 1):
             state["attempt"] = attempt
+            state["attempt_backtrack_count"] = 0
             if attempt > 1:
                 _log(f"[WFC Worker] ── Attempt {attempt}/{attempt_limit}  "
                      f"(total backtracks so far: {state['backtrack_count']})")
@@ -704,11 +725,11 @@ class MM2Viewer(tk.Tk):
 
         # Full WFC parameter set — edited via the Settings dialog
         self.wfc_params = {
-            "width":          80,      # 0 = auto
-            "height":         15,      # 0 = auto
+            "width":          0,      # 0 = auto
+            "height":         0,      # 0 = auto
             "pattern_width":  2,      # neighbourhood size (N-gram width)
             "attempt_limit":  10,     # contradiction retries before giving up
-            "backtracking":   True,  # backtracking (slow but more thorough)
+            "backtracking":   False,  # backtracking (slow but more thorough)
             "loc_heuristic":  "entropy",   # cell-selection strategy
             "choice_heuristic": "weighted", # pattern-selection strategy
         }
@@ -722,6 +743,7 @@ class MM2Viewer(tk.Tk):
         tb.pack(fill=tk.X, side=tk.TOP, padx=2, pady=2)
  
         tk.Button(tb, text="Load JSON",            command=self._load_json).pack(side=tk.LEFT, padx=4)
+        tk.Button(tb, text="Load ASCII",           command=self._load_ascii).pack(side=tk.LEFT, padx=4)
         tk.Button(tb, text="Load from dataset",    command=self._load_dataset).pack(side=tk.LEFT, padx=4)
  
         ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
@@ -817,6 +839,141 @@ class MM2Viewer(tk.Tk):
             self._redraw()
         except Exception as e:
             messagebox.showerror("Load error", str(e))
+
+    def _load_ascii(self):
+        """Load a plain-text ASCII level file (.txt) exported by Export ASCII.
+
+        The file is a grid of characters, one row per line, where:
+          '#'        = ground tile
+          '.'  '-'   = empty air
+          anything else = object (looked up via ASCII_MAP)
+
+        The loaded level is converted to the same ground+objects dict format
+        used everywhere else, so all viewer features (zoom, categories, PNG
+        export, WFC training) work on it without any special-casing.
+
+        Multiple files can be selected; each becomes a separate level entry
+        so you can page through them with Prev/Next.
+        """
+        paths = filedialog.askopenfilenames(
+            title="Select ASCII level file(s)",
+            filetypes=[("Text files", "*.txt"), ("All", "*.*")])
+        if not paths:
+            return
+
+        loaded = []
+        errors = []
+        for path in paths:
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    raw_lines = f.read().splitlines()
+
+                # Strip blank lines at top/bottom; keep interior blank lines
+                # as empty rows (they represent sky).
+                while raw_lines and not raw_lines[0].strip():
+                    raw_lines.pop(0)
+                while raw_lines and not raw_lines[-1].strip():
+                    raw_lines.pop()
+
+                if not raw_lines:
+                    errors.append(f"{os.path.basename(path)}: file is empty")
+                    continue
+
+                # Normalise row width — pad short rows with '.' so the grid
+                # is rectangular before we hand it off to the decode path.
+                max_w = max(len(r) for r in raw_lines)
+                rows  = [r.ljust(max_w, ".") for r in raw_lines]
+
+                name = os.path.splitext(os.path.basename(path))[0]
+                print(f"[Load ASCII] '{name}'  {max_w}w × {len(rows)}h")
+
+                # ---- parse layout markers out of the grid ---- #
+                # The exported ASCII grid bakes in S (spawn), G/X (goal)
+                # as literal characters.  Scan for them to recover the
+                # metadata that _redraw needs, then treat them as air so
+                # they don't become spurious object entries.
+
+                grid_h = len(rows)
+                spawn_col_found = None
+                spawn_row_found = None   # canvas row (0=top)
+                goal_col_found  = None
+                goal_row_found  = None
+                is_castle        = False
+
+                for ri, row_str in enumerate(rows):
+                    for ci, ch in enumerate(row_str):
+                        if ch == "S":
+                            spawn_col_found = ci
+                            spawn_row_found = ri
+                        elif ch in ("G", "X"):
+                            goal_col_found = ci
+                            goal_row_found = ri
+                            is_castle = (ch == "X")
+
+                # Convert canvas rows → game-Y  (game_y = grid_h - 1 - canvas_row)
+                if spawn_row_found is not None:
+                    start_y = (grid_h - 1) - spawn_row_found
+                else:
+                    start_y = 1   # SMM2 default
+
+                if goal_row_found is not None:
+                    goal_y_game = (grid_h - 1) - goal_row_found
+                    # goal_y_raw in the level dict is the raw game-Y value
+                    goal_y_raw = goal_y_game
+                else:
+                    goal_y_raw = 0
+
+                if goal_col_found is not None:
+                    # _redraw computes: goal_base_col = goal_x_raw // 10
+                    # and then:         max_tx = goal_base_col + 10
+                    # So we need goal_x_raw = goal_col_found * 10  (exact)
+                    # AND boundary_right must equal (goal_col_found + 10) * 16
+                    # so that max_tx from boundary_right also equals goal_base_col+10.
+                    goal_x_raw = goal_col_found * 10
+                    boundary_right = (goal_col_found + 10) * 16
+                else:
+                    goal_x_raw     = 0
+                    boundary_right = max_w * 16
+
+                print(f"[Load ASCII]   spawn col={spawn_col_found} canvas_row={spawn_row_found} → start_y={start_y}")
+                print(f"[Load ASCII]   goal  col={goal_col_found}  canvas_row={goal_row_found}  → goal_y_raw={goal_y_raw}  goal_x_raw={goal_x_raw}  castle={is_castle}")
+
+                # Build a minimal level dict with the recovered metadata
+                base = {
+                    "name":             name,
+                    "gamestyle":        "smb1",
+                    "theme":            "castle" if is_castle else "overworld",
+                    "start_y":          start_y,
+                    "goal_x_raw":       goal_x_raw,
+                    "goal_y_raw":       goal_y_raw,
+                    "boundary_right":   boundary_right,
+                    "objects":          [],
+                    "ground":           [],
+                    "subworld_objects": [],
+                    "subworld_ground":  [],
+                    "_wfc_min_y":       0,
+                }
+
+                # skip_spawn_passes=True: the exported file already has the
+                # correct start/goal zones baked in — don't clobber them.
+                level = self._decode_wfc_result(rows, base, skip_spawn_passes=True)
+                level["name"] = name   # restore filename after decode overwrites it
+                loaded.append(level)
+                print(f"[Load ASCII] Decoded: {len(level['ground'])} ground, "
+                      f"{len(level['objects'])} objects")
+
+            except Exception as exc:
+                errors.append(f"{os.path.basename(path)}: {exc}")
+
+        if errors:
+            messagebox.showwarning(
+                "Load ASCII — some files failed",
+                "\n".join(errors))
+
+        if loaded:
+            self.levels = loaded
+            self.current_idx = 0
+            self._redraw()
  
     def _load_dataset(self):
         dlg = _DatasetDialog(self)
@@ -925,22 +1082,16 @@ class MM2Viewer(tk.Tk):
 
         return training_strings, gen_width, gen_height, current_level_dict
 
-    def _decode_wfc_result(self, generated_rows, current_level_dict):
+    def _decode_wfc_result(self, generated_rows, current_level_dict,
+                            skip_spawn_passes=False):
         """Turn WFC ASCII output back into ground + object lists.
 
         After decoding the raw WFC grid, two spawn-safety passes are applied
-        before any objects are committed:
+        before any objects are committed (skipped when skip_spawn_passes=True,
+        e.g. when loading an exported ASCII file that already has them baked in):
 
         Pass 1 — Clear zone (7 × 3 rectangle around the spawn point)
-            Mario spawns at tile column 3 (centre of the 7-wide start zone),
-            at game-row start_y.  The 7-wide × 3-tall rectangle centred on
-            that column, spanning game rows [start_y .. start_y+2], must be
-            completely empty — no blocks, items, or enemies.
-
         Pass 2 — Foundation column beneath the spawn point
-            Every tile in column 3 below game-row start_y down to game-row 0
-            is forced to solid ground ('#'), so Mario can never fall into a
-            pit immediately on spawn.
         """
         actual_w   = len(generated_rows[0]) if generated_rows else 0
         actual_h   = len(generated_rows)
@@ -963,44 +1114,45 @@ class MM2Viewer(tk.Tk):
         clear_above = 2          # spawn row + 2 rows above = 3 tall total
 
         # ------------------------------------------------------------------ #
-        # Pass 1: enforce 7 × 3 clear zone                                   #
+        # Pass 1 & 2: spawn constraints — skip for ASCII loads               #
         # ------------------------------------------------------------------ #
-        # Game rows that must be empty: start_y (spawn row) and the two rows
-        # directly above it (start_y+1, start_y+2).
-        for dy in range(clear_above + 1):          # 0, 1, 2
-            gy  = start_y + dy
-            row = game_y_to_row(gy)
-            if not (0 <= row < gen_height):
-                continue
-            for dc in range(-clear_half, clear_half + 1):   # -3 … +3
-                col = spawn_col + dc
-                if 0 <= col < actual_w:
-                    grid[row][col] = "."
+        if skip_spawn_passes:
+            print(f"[Decode] Skipping spawn passes (ASCII load — already baked in)")
+        else:
+            for dy in range(clear_above + 1):          # 0, 1, 2
+                gy  = start_y + dy
+                row = game_y_to_row(gy)
+                if not (0 <= row < gen_height):
+                    continue
+                for dc in range(-clear_half, clear_half + 1):   # -3 … +3
+                    col = spawn_col + dc
+                    if 0 <= col < actual_w:
+                        grid[row][col] = "."
 
-        clear_count = (clear_half * 2 + 1) * (clear_above + 1)
-        print(f"[Spawn] Cleared {clear_half*2+1}×{clear_above+1} zone "
-              f"at col {spawn_col - clear_half}–{spawn_col + clear_half}, "
-              f"game-y {start_y}–{start_y + clear_above}  "
-              f"({clear_count} cells forced empty)")
+            clear_count = (clear_half * 2 + 1) * (clear_above + 1)
+            print(f"[Spawn] Cleared {clear_half*2+1}×{clear_above+1} zone "
+                  f"at col {spawn_col - clear_half}–{spawn_col + clear_half}, "
+                  f"game-y {start_y}–{start_y + clear_above}  "
+                  f"({clear_count} cells forced empty)")
 
-        # ------------------------------------------------------------------ #
-        # Pass 2: enforce solid foundation below the spawn column            #
-        # ------------------------------------------------------------------ #
-        foundation_placed = 0
-        for gy in range(0, start_y):               # game rows below spawn
-            row = game_y_to_row(gy)
-            if not (0 <= row < gen_height):
-                continue
-            if grid[row][spawn_col] != "#":
-                grid[row][spawn_col] = "#"
-                foundation_placed += 1
+            # Pass 2: enforce solid foundation below the spawn column
+            foundation_placed = 0
+            for gy in range(0, start_y):               # game rows below spawn
+                row = game_y_to_row(gy)
+                if not (0 <= row < gen_height):
+                    continue
+                if grid[row][spawn_col] != "#":
+                    grid[row][spawn_col] = "#"
+                    foundation_placed += 1
 
-        print(f"[Spawn] Placed {foundation_placed} foundation blocks "
-              f"in column {spawn_col} below game-y {start_y}")
+            print(f"[Spawn] Placed {foundation_placed} foundation blocks "
+                  f"in column {spawn_col} below game-y {start_y}")
 
         # ------------------------------------------------------------------ #
         # Convert the patched grid → objects + ground lists                  #
+        # S / G / X are layout markers, not game objects — skip them         #
         # ------------------------------------------------------------------ #
+        SKIP_CHARS = {".", "-", " ", "S", "G", "X"}
         current_level_dict["objects"] = []
         current_level_dict["ground"]  = []
 
@@ -1012,7 +1164,7 @@ class MM2Viewer(tk.Tk):
                         "x": c, "y": game_y,
                         "tile_id": 0, "background_id": 0,
                     })
-                elif char not in (".", "-", " "):
+                elif char not in SKIP_CHARS:
                     obj_id_str = None
                     for name, ch in ASCII_MAP.items():
                         if ch == char and name not in ("ground", "_ground_tile"):
@@ -1094,7 +1246,7 @@ class MM2Viewer(tk.Tk):
         )
         wfc_process.start()
 
-        WFC_TIMEOUT = 5000.0
+        WFC_TIMEOUT = 500000.0
         start_time  = time.monotonic()
 
         # Progress dialog — now includes Pause/Resume button
@@ -1967,6 +2119,7 @@ class _WFCSettingsDialog(tk.Toplevel):
         self.title("WFC Generation Settings")
         self.resizable(False, False)
         self.result = None
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         p = current_params   # shorthand
 
@@ -2025,7 +2178,7 @@ class _WFCSettingsDialog(tk.Toplevel):
         al_f.grid(row=row, column=1, columnspan=2, sticky=tk.W)
         tk.Spinbox(al_f, from_=1, to=100, textvariable=self._v_attempts,
                    width=4, justify=tk.CENTER).pack(side=tk.LEFT)
-        tk.Label(al_f, text="  contradiction retries before giving up",
+        tk.Label(al_f, text="  full restarts from a blank wave on unrecoverable contradiction",
                  fg="#555555", font=("TkDefaultFont", 8)).pack(side=tk.LEFT)
         row += 1
 
@@ -2035,7 +2188,7 @@ class _WFCSettingsDialog(tk.Toplevel):
         bt_f = tk.Frame(frame)
         bt_f.grid(row=row, column=1, columnspan=2, sticky=tk.W)
         tk.Checkbutton(bt_f, variable=self._v_bt,
-                       text="Enable  (slower but avoids more contradictions)"
+                       text="Enable  (undo last cell choice on contradiction, within a single run)"
                        ).pack(side=tk.LEFT)
         row += 1
 
@@ -2110,8 +2263,8 @@ class _WFCSettingsDialog(tk.Toplevel):
                   command=self._apply).pack(side=tk.LEFT, padx=6)
         tk.Button(btn_f, text="Reset Defaults", width=14,
                   command=self._reset).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_f, text="Cancel", width=10,
-                  command=self.destroy).pack(side=tk.LEFT, padx=6)
+        tk.Button(btn_f, text="Close", width=10,
+                  command=self._on_close).pack(side=tk.LEFT, padx=6)
 
         self._update_hints()
         self.transient(parent)
@@ -2135,7 +2288,7 @@ class _WFCSettingsDialog(tk.Toplevel):
     }
     _CHOICE_HINTS = {
         "weighted":  "pick pattern proportional to its frequency in training data",
-        "rarest":    "prefer the rarest pattern — maximises variety",
+        "rarest":    "⚠ library bug: actually picks most-used global pattern, ignores cell constraints — causes excessive backtracks",
         "random":    "uniform random choice among valid patterns",
         "lexical":   "always pick the lowest-index valid pattern",
     }
@@ -2146,9 +2299,9 @@ class _WFCSettingsDialog(tk.Toplevel):
         self._choice_hint.config(
             text=self._CHOICE_HINTS.get(self._v_choice.get(), ""))
 
-    # ---- apply / reset --------------------------------------------------- #
-    def _apply(self):
-        self.result = {
+    def _collect(self) -> dict:
+        """Read current widget values into a params dict."""
+        return {
             "width":            self._v_width.get(),
             "height":           self._v_height.get(),
             "pattern_width":    max(2, self._v_pat_w.get()),
@@ -2157,7 +2310,11 @@ class _WFCSettingsDialog(tk.Toplevel):
             "loc_heuristic":    self._v_loc.get(),
             "choice_heuristic": self._v_choice.get(),
         }
-        self.destroy()
+
+    # ---- apply / reset / close ------------------------------------------- #
+    def _apply(self):
+        self.result = self._collect()
+        self._safe_close()
 
     def _reset(self):
         self._v_width.set(0)
@@ -2168,6 +2325,16 @@ class _WFCSettingsDialog(tk.Toplevel):
         self._v_loc.set("entropy")
         self._v_choice.set("weighted")
         self._update_hints()
+
+    def _on_close(self):
+        """Closing the window (X button) also saves — same as Apply."""
+        self.result = self._collect()
+        self._safe_close()
+
+    def _safe_close(self):
+        if self.winfo_exists():
+            self.grab_release()
+            self.destroy()
 
 
 # ---------------------------------------------------------------------------
