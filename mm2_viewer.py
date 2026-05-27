@@ -667,8 +667,8 @@ class MM2Viewer(tk.Tk):
         self._tooltip_win = None
  
         # WFC output size — 0 means "auto: derive from the current level"
-        self.wfc_width  = tk.IntVar(value=200)
-        self.wfc_height = tk.IntVar(value=20)
+        self.wfc_width  = tk.IntVar(value=0)
+        self.wfc_height = tk.IntVar(value=0)
  
         self._build_ui()
  
@@ -697,6 +697,7 @@ class MM2Viewer(tk.Tk):
         tk.Checkbutton(tb, text="ASCII mode", variable=self.ascii_mode,
                        command=self._redraw).pack(side=tk.LEFT, padx=4)
         tk.Button(tb, text="Export ASCII", command=self._export_ascii).pack(side=tk.LEFT, padx=2)
+        tk.Button(tb, text="Capture PNG",  command=self._capture_png).pack(side=tk.LEFT, padx=2)
  
         ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         tk.Label(tb, text="WFC W:").pack(side=tk.LEFT)
@@ -709,7 +710,7 @@ class MM2Viewer(tk.Tk):
             tb, from_=0, to=28, textvariable=self.wfc_height,
             width=3, justify=tk.CENTER)
         self._wfc_h_spin.pack(side=tk.LEFT, padx=(0, 2))
-        tk.Label(tb, text="(200,20=auto)", fg="#888888",
+        tk.Label(tb, text="(0=auto)", fg="#888888",
                  font=("TkDefaultFont", 7)).pack(side=tk.LEFT, padx=(0, 4))
         tk.Button(tb, text="Generate WFC Level", command=self._run_wfc_generation).pack(side=tk.LEFT, padx=4)
  
@@ -993,6 +994,26 @@ class MM2Viewer(tk.Tk):
                         })
  
         current_level_dict["boundary_right"] = actual_w * 16
+ 
+        # Overwrite any stale metadata from the source level so the status bar,
+        # title, and counters all reflect the newly-generated level accurately.
+        n_ground  = len(current_level_dict["ground"])
+        n_objects = len(current_level_dict["objects"])
+        current_level_dict["name"] = (
+            f"WFC Generated  ({actual_w}\u00d7{actual_h})"
+        )
+        # Keep gamestyle/theme from the training level (they affect rendering),
+        # but clear raw goal coords so the renderer computes them from scratch.
+        current_level_dict.pop("goal_x_raw", None)
+        current_level_dict.pop("goal_y_raw", None)
+        current_level_dict["goal_x_raw"] = 0
+        current_level_dict["goal_y_raw"] = 0
+        # Subworld data is irrelevant for a freshly generated level
+        current_level_dict["subworld_objects"] = []
+        current_level_dict["subworld_ground"]  = []
+ 
+        print(f"[Decode] Final level: '{current_level_dict['name']}'  "
+              f"{n_ground} ground tiles  {n_objects} objects")
         return current_level_dict
  
     def _launch_wfc_async(self, base_level):
@@ -1038,7 +1059,7 @@ class MM2Viewer(tk.Tk):
         )
         wfc_process.start()
  
-        WFC_TIMEOUT = 20000.0
+        WFC_TIMEOUT = 10000.0
         start_time  = time.monotonic()
  
         # Progress dialog — now includes Pause/Resume button
@@ -1598,6 +1619,194 @@ class MM2Viewer(tk.Tk):
             for row in grid:
                 f.write("".join(row) + "\n")
         messagebox.showinfo("Exported", f"Saved to {path}")
+ 
+    def _capture_png(self):
+        """Render the entire level to a PNG file using PIL.
+ 
+        The image is drawn off-screen at the current zoom level, reproducing
+        the same visual as the main canvas — sky background, ground tiles,
+        objects with category colours, start zone, goal, grid lines — but
+        covering the *full* level width rather than just the visible viewport.
+        PIL is used directly so no window capture / screenshot hacks are needed.
+        """
+        if not self.levels:
+            messagebox.showwarning("No level", "Load a level first.")
+            return
+ 
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            messagebox.showerror(
+                "PIL not found",
+                "Pillow is required for PNG export.\n"
+                "Install it with:  pip install Pillow")
+            return
+ 
+        lvl  = self.levels[self.current_idx]
+        name = lvl.get("name", f"level_{self.current_idx+1}")
+ 
+        path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG image", "*.png"), ("All", "*.*")],
+            title="Capture level as PNG",
+            initialfile=f"{name}.png")
+        if not path:
+            return
+ 
+        # ---- reproduce the same geometry as _redraw ---------------------- #
+        objects  = lvl.get("objects", [])
+        ground   = lvl.get("ground",  [])
+        ts       = self.tile_size
+ 
+        theme     = lvl.get("theme",     "overworld")
+        gamestyle = lvl.get("gamestyle", "smb1")
+        is_castle_axe = (theme == "castle" and gamestyle != "sm3dw")
+ 
+        max_tx, max_ty = 40, 20
+        for o in objects:
+            max_tx = max(max_tx, int(math.ceil(o["x"] / self.TILE_PX)) + 2)
+            max_ty = max(max_ty, o["y"] // self.TILE_PX + 2)
+        for g in ground:
+            max_tx = max(max_tx, g["x"] + 2)
+            max_ty = max(max_ty, g["y"] + 2)
+        max_tx = min(max_tx, self.MAX_COLS) - 1
+        max_ty = min(max_ty, self.MAX_ROWS)
+ 
+        goal_x_raw  = int(lvl.get("goal_x_raw", 0))
+        goal_x_tile = math.ceil(goal_x_raw // 10) if goal_x_raw > 0 else 0
+        if is_castle_axe:
+            goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 10
+            max_tx = max(max_tx, goal_base_col + 2)
+        else:
+            goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 9
+            max_tx = goal_base_col + 10
+            max_ty -= 1
+ 
+        W, H = max_tx * ts, max_ty * ts
+ 
+        # ---- helpers ----------------------------------------------------- #
+        def hex_to_rgb(h):
+            h = h.lstrip("#")
+            return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+ 
+        SKY_RGB   = hex_to_rgb("#5C94FC")
+        GND_RGB   = hex_to_rgb(GROUND_COLOR)
+        GND_OUT   = hex_to_rgb("#5A3E00")
+        GRID_RGB  = hex_to_rgb("#888888")
+ 
+        # Try to load a small monospace font; fall back to PIL default
+        try:
+            font_size = max(ts // 2, 7)
+            font = ImageFont.truetype("cour.ttf", font_size)
+        except Exception:
+            try:
+                font = ImageFont.truetype("DejaVuSansMono.ttf", max(ts // 2, 7))
+            except Exception:
+                font = ImageFont.load_default()
+ 
+        img  = Image.new("RGB", (W, H), SKY_RGB)
+        draw = ImageDraw.Draw(img)
+        show_lbl = self.show_labels.get() and ts >= 14
+        active   = self._active_cats()
+ 
+        def draw_tile(col, row_canvas, fill_hex, outline_hex, char=None, char_hex="#FFFFFF"):
+            x0, y0 = col * ts, row_canvas * ts
+            x1, y1 = x0 + ts - 1, y0 + ts - 1
+            fill_rgb   = hex_to_rgb(fill_hex)
+            outline_rgb = hex_to_rgb(outline_hex)
+            draw.rectangle([x0, y0, x1, y1], fill=fill_rgb, outline=outline_rgb)
+            if show_lbl and char:
+                draw.text((x0 + ts // 2, y0 + ts // 2), char,
+                          fill=hex_to_rgb(char_hex), font=font, anchor="mm")
+ 
+        # ---- grid lines -------------------------------------------------- #
+        if self.show_grid.get():
+            for col in range(max_tx + 1):
+                draw.line([(col * ts, 0), (col * ts, H)], fill=GRID_RGB)
+            for row in range(max_ty + 1):
+                draw.line([(0, row * ts), (W, row * ts)], fill=GRID_RGB)
+ 
+        # ---- ground tiles ------------------------------------------------ #
+        if self.show_ground.get() and CAT_TERRAIN in active:
+            for g in ground:
+                col, row_game = g["x"], g["y"]
+                if col >= max_tx or row_game >= max_ty:
+                    continue
+                draw_tile(col, max_ty - 1 - row_game,
+                          GROUND_COLOR, "#5A3E00",
+                          GROUND_CHAR if show_lbl else None, "#EDD090")
+ 
+        # ---- objects ----------------------------------------------------- #
+        if self.show_objects.get():
+            pad = max(1, ts // 8)
+            for obj in objects:
+                name_str        = obj_id_to_str(obj["id"])
+                char, color, cat = get_meta(name_str)
+                if cat not in active:
+                    continue
+                col      = int(math.ceil(obj["x"] // self.TILE_PX))
+                row_game = obj["y"] // self.TILE_PX
+                if col >= max_tx or row_game >= max_ty:
+                    continue
+                rc = max_ty - 1 - row_game
+                x0, y0 = col * ts + pad, rc * ts + pad
+                x1, y1 = col * ts + ts - pad - 1, rc * ts + ts - pad - 1
+                draw.rectangle([x0, y0, x1, y1],
+                               fill=hex_to_rgb(color), outline=(0, 0, 0))
+                if show_lbl:
+                    draw.text((col * ts + ts // 2, rc * ts + ts // 2), char,
+                              fill=(255, 255, 255), font=font, anchor="mm")
+ 
+        # ---- start zone -------------------------------------------------- #
+        START_W     = 7
+        start_ygame = lvl.get("start_y", 1)
+        for sc_col in range(START_W):
+            if sc_col >= max_tx:
+                continue
+            for row in range(0, start_ygame):
+                if row >= max_ty:
+                    continue
+                draw_tile(sc_col, max_ty - 1 - row,
+                          GROUND_COLOR, "#5A3E00",
+                          "#" if (show_lbl and row == start_ygame - 1) else None,
+                          "#EDD090")
+        if 3 < max_tx and start_ygame < max_ty:
+            draw_tile(3, max_ty - 1 - start_ygame, "#00CC00", "#006600",
+                      "S" if show_lbl else None)
+ 
+        # ---- goal zone --------------------------------------------------- #
+        goal_base_ygame = int(lvl.get("goal_y_raw", 0))
+        GOAL_W = 11 if not is_castle_axe else 10
+        for gc_col in range(GOAL_W):
+            col_abs = goal_base_col + gc_col
+            if col_abs < 0 or col_abs >= max_tx:
+                continue
+            for row in range(0, goal_base_ygame):
+                if row >= max_ty:
+                    continue
+                draw_tile(col_abs, max_ty - 1 - row,
+                          GROUND_COLOR, "#5A3E00",
+                          "#" if (show_lbl and row == goal_base_ygame - 1) else None,
+                          "#EDD090")
+        top_row = goal_base_ygame
+        if is_castle_axe:
+            for b in range(14):
+                bc = goal_base_col - 14 + b
+                if 0 <= bc < max_tx:
+                    draw_tile(bc, max_ty - 1 - (goal_base_ygame - 1),
+                              "#8B4513", "#5A2E00",
+                              "=" if show_lbl else None, "#DDAA88")
+            if goal_base_col < max_tx and top_row < max_ty:
+                draw_tile(goal_base_col, max_ty - 1 - top_row,
+                          "#DD0000", "#880000", "X" if show_lbl else None)
+        else:
+            if goal_base_col < max_tx and top_row < max_ty:
+                draw_tile(goal_base_col, max_ty - 1 - top_row,
+                          "#DD0000", "#880000", "G" if show_lbl else None)
+ 
+        # ---- save -------------------------------------------------------- #
+        img.save(path)
+        messagebox.showinfo("Captured", f"PNG saved to {path}\n({W}×{H} px)")
  
     # --------------------------------------------------------------- tooltip --
  
