@@ -1,25 +1,32 @@
+
 """
 MM2 Level Viewer
 ================
 Visual browser for Super Mario Maker 2 level data parsed via level.py.
-
+ 
 Usage
 -----
     python mm2_viewer.py                  # open GUI, use buttons to load
     python mm2_viewer.py my_level.json    # auto-load a JSON export
-
+ 
 Coordinate systems
 ------------------
   Objects : pixel coords (multiples of 160).  Tile col/row = coord // 160
   Ground  : already raw tile indices (small ints). Y=0 is the bottom row.
   Display : Y is flipped so Y=0 appears at the BOTTOM of the canvas.
 """
-
+ 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import json, sys, os, zlib
 from io import BytesIO
+from datasets import load_dataset
+from kaitaistruct import KaitaiStream
+from io import BytesIO
+from level import Level
+import zlib
 
+ 
 # ---------------------------------------------------------------------------
 # ObjId integer → name  (matches level.py ObjId enum exactly)
 # ---------------------------------------------------------------------------
@@ -61,7 +68,7 @@ OBJID_INT_TO_STR = {
     127:"cannon_box", 128:"propeller_box", 129:"goomba_mask",
     130:"bullet_bill_mask", 131:"red_pow_box", 132:"on_off_trampoline",
 }
-
+ 
 def obj_id_to_str(obj_id) -> str:
     """Handle enum objects, 'ObjId.door' strings, or raw integers."""
     if isinstance(obj_id, int):
@@ -74,7 +81,7 @@ def obj_id_to_str(obj_id) -> str:
         return OBJID_INT_TO_STR.get(int(s), "_unknown")
     except ValueError:
         return s if s else "_unknown"
-
+ 
 # ---------------------------------------------------------------------------
 # Category → (char, bg_color)
 # ---------------------------------------------------------------------------
@@ -86,7 +93,7 @@ CAT_DOOR     = "door"
 CAT_HAZARD   = "hazard"
 CAT_DECO     = "deco"
 CAT_OTHER    = "other"
-
+ 
 # name → (char, color, category)
 OBJ_META = {
     # terrain
@@ -233,10 +240,10 @@ OBJ_META = {
     "_ground_tile":        ("#", "#8B6914", CAT_TERRAIN),
     "_unknown":            ("?", "#FF00FF", CAT_OTHER),
 }
-
+ 
 GROUND_COLOR = "#8B6914"
 GROUND_CHAR  = "#"
-
+ 
 # ---------------------------------------------------------------------------
 # ASCII map — obj name → single character
 # ---------------------------------------------------------------------------
@@ -282,8 +289,8 @@ ASCII_MAP = {
     "starting_arrow":">","cannon":"o","exclamation_block":"!",
     "_unknown":"?",
 }
-
-
+ 
+ 
 CAT_COLORS = {
     CAT_TERRAIN:  "#C8A050",
     CAT_ENEMY:    "#CC4444",
@@ -294,10 +301,10 @@ CAT_COLORS = {
     CAT_DECO:     "#88BB88",
     CAT_OTHER:    "#AAAAAA",
 }
-
+ 
 def get_meta(name: str):
     return OBJ_META.get(name, OBJ_META["_unknown"])
-
+ 
 # ---------------------------------------------------------------------------
 # Convert a parsed kaitai Level object → plain dict
 # ---------------------------------------------------------------------------
@@ -313,37 +320,37 @@ def level_to_dict(level, name: str = "") -> dict:
             gnd.append({"x": int(g.x), "y": int(g.y),
                         "tile_id": int(g.id), "background_id": int(g.background_id)})
         return objs, gnd
-
+ 
     ow_objs, ow_gnd = parse_map(level.overworld)
     sw_objs, sw_gnd = parse_map(level.subworld)
     level_name = name or getattr(level, "name", "Unknown")
     if isinstance(level_name, (bytes, bytearray)):
         level_name = level_name.decode("utf-16-le", errors="replace")
     level_name = level_name.strip("\x00").strip()
-
+ 
     start_y = int(getattr(level, "start_y", 0))
     goal_x  = int(getattr(level, "goal_x",  0))
     goal_y  = int(getattr(level, "goal_y",  0))
-
+ 
     # boundary_right is the actual right edge of this level in pixels
     boundary_right = int(level.overworld.boundary_right)
-
+ 
     gamestyle = str(getattr(level, "gamestyle", "")).lower()
     theme     = str(level.overworld.theme).lower()
     if "." in gamestyle:
         gamestyle = gamestyle.split(".")[-1]
     if "." in theme:
         theme = theme.split(".")[-1]
-
+ 
     # --- DEBUG ---
     print(f"\n=== LEVEL: {level_name} ===")
     print(f"  gamestyle={gamestyle}  theme={theme}")
-    print(f"  header: start_y={start_y}  goal_x={goal_x}  goal_y={goal_y}  (goal_x//160={goal_x//160 if goal_x else 0})")
+    print(f"  header: start_y={start_y}  goal_x={goal_x}  goal_y={goal_y}  (goal_x//160={goal_x//160 if goal_x else 0})  (goal_x//10={goal_x//10 if goal_x else 0})")
     print(f"  all objects ({len(ow_objs)}):")
     for o in ow_objs:
         print(f"    id={o['id']}  x={o['x']}  y={o['y']}  tile_col={o['x']//160}  tile_row={o['y']//160}")
     # --- END DEBUG ---
-
+ 
     return {
         "name":           level_name,
         "gamestyle":      gamestyle,
@@ -357,12 +364,12 @@ def level_to_dict(level, name: str = "") -> dict:
         "subworld_objects": sw_objs,
         "subworld_ground":  sw_gnd,
     }
-
+ 
 def export_level_json(level, path: str, name: str = ""):
     with open(path, "w") as f:
         json.dump(level_to_dict(level, name), f, indent=2)
     print(f"Exported to {path}")
-
+ 
 # ---------------------------------------------------------------------------
 # Main viewer
 # ---------------------------------------------------------------------------
@@ -370,16 +377,16 @@ class MM2Viewer(tk.Tk):
     TILE_PX   = 160   # object pixel coords → divide by this to get tile index
     MAX_COLS  = 240
     MAX_ROWS  = 28
-
+ 
     def __init__(self):
         super().__init__()
         self.title("MM2 Level Viewer")
         self.resizable(True, True)
-
+ 
         self.levels      = []
         self.current_idx = 0
         self.tile_size   = 16
-
+ 
         self.show_ground  = tk.BooleanVar(value=True)
         self.show_objects = tk.BooleanVar(value=True)
         self.show_grid    = tk.BooleanVar(value=True)
@@ -387,35 +394,35 @@ class MM2Viewer(tk.Tk):
         self.ascii_mode   = tk.BooleanVar(value=False)
         self._cat_vars    = {}   # cat → BooleanVar
         self._tooltip_win = None
-
+ 
         self._build_ui()
-
+ 
     # ------------------------------------------------------------------ UI --
     def _build_ui(self):
         # toolbar
         tb = tk.Frame(self, bd=1, relief=tk.RAISED)
         tb.pack(fill=tk.X, side=tk.TOP, padx=2, pady=2)
-
+ 
         tk.Button(tb, text="Load JSON",            command=self._load_json).pack(side=tk.LEFT, padx=4)
         tk.Button(tb, text="Load from dataset",    command=self._load_dataset).pack(side=tk.LEFT, padx=4)
-
+ 
         ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         tk.Checkbutton(tb, text="Ground",  variable=self.show_ground,  command=self._redraw).pack(side=tk.LEFT)
         tk.Checkbutton(tb, text="Objects", variable=self.show_objects, command=self._redraw).pack(side=tk.LEFT)
         tk.Checkbutton(tb, text="Grid",    variable=self.show_grid,    command=self._redraw).pack(side=tk.LEFT)
         tk.Checkbutton(tb, text="Labels",  variable=self.show_labels,  command=self._redraw).pack(side=tk.LEFT)
-
+ 
         ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         tk.Label(tb, text="Zoom:").pack(side=tk.LEFT)
         self.zoom_var = tk.IntVar(value=16)
         tk.Scale(tb, from_=6, to=40, orient=tk.HORIZONTAL, variable=self.zoom_var,
                  command=lambda _: self._on_zoom(), showvalue=True, length=120).pack(side=tk.LEFT)
-
+ 
         ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         tk.Checkbutton(tb, text="ASCII mode", variable=self.ascii_mode,
                        command=self._redraw).pack(side=tk.LEFT, padx=4)
         tk.Button(tb, text="Export ASCII", command=self._export_ascii).pack(side=tk.LEFT, padx=2)
-
+ 
         # category filter bar
         fb = tk.Frame(self)
         fb.pack(fill=tk.X, padx=2)
@@ -426,7 +433,7 @@ class MM2Viewer(tk.Tk):
             tk.Checkbutton(fb, text=cat, variable=v,
                            fg=col, activeforeground=col,
                            command=self._redraw).pack(side=tk.LEFT, padx=2)
-
+ 
         # canvas + scrollbars
         cf = tk.Frame(self)
         cf.pack(fill=tk.BOTH, expand=True)
@@ -441,12 +448,12 @@ class MM2Viewer(tk.Tk):
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         hbar.config(command=self.canvas.xview)
         vbar.config(command=self.canvas.yview)
-
+ 
         self.canvas.bind("<ButtonPress-1>",  self._drag_start)
         self.canvas.bind("<B1-Motion>",      self._drag_move)
         self.canvas.bind("<Motion>",         self._on_hover)
         self.canvas.bind("<Leave>",          lambda _: self._hide_tip())
-
+ 
         # nav bar
         nav = tk.Frame(self)
         nav.pack(fill=tk.X, padx=4, pady=2)
@@ -458,17 +465,17 @@ class MM2Viewer(tk.Tk):
         self.jump_entry.bind("<Return>", self._jump)
         self.info_lbl = tk.Label(nav, text="No level loaded", anchor=tk.W)
         self.info_lbl.pack(side=tk.LEFT, padx=12)
-
+ 
         # legend
         leg = tk.Frame(self, bd=1, relief=tk.SUNKEN)
         leg.pack(fill=tk.X, side=tk.BOTTOM, padx=2, pady=2)
         tk.Label(leg, text="Legend:").pack(side=tk.LEFT)
         for cat, col in CAT_COLORS.items():
             tk.Label(leg, text=f" {cat} ", bg=col, fg="white", padx=3).pack(side=tk.LEFT, padx=2)
-
+ 
         self.bind("<Right>", lambda _: self._next())
         self.bind("<Left>",  lambda _: self._prev())
-
+ 
     # --------------------------------------------------------------- loading --
     def _load_json(self):
         path = filedialog.askopenfilename(
@@ -486,7 +493,7 @@ class MM2Viewer(tk.Tk):
             self._redraw()
         except Exception as e:
             messagebox.showerror("Load error", str(e))
-
+ 
     def _load_dataset(self):
         dlg = _DatasetDialog(self)
         self.wait_window(dlg)
@@ -494,23 +501,23 @@ class MM2Viewer(tk.Tk):
             self.levels = dlg.result
             self.current_idx = 0
             self._redraw()
-
+ 
     def load_level_from_parsed(self, level, name=""):
         self.levels = [level_to_dict(level, name)]
         self.current_idx = 0
         self._redraw()
-
+ 
     # ------------------------------------------------------------ navigation --
     def _prev(self):
         if self.current_idx > 0:
             self.current_idx -= 1
             self._redraw()
-
+ 
     def _next(self):
         if self.current_idx < len(self.levels) - 1:
             self.current_idx += 1
             self._redraw()
-
+ 
     def _jump(self, _=None):
         try:
             idx = int(self.jump_entry.get()) - 1
@@ -519,32 +526,32 @@ class MM2Viewer(tk.Tk):
                 self._redraw()
         except ValueError:
             pass
-
+ 
     def _on_zoom(self):
         self.tile_size = self.zoom_var.get()
         self._redraw()
-
+ 
     # --------------------------------------------------------------- drawing --
     def _active_cats(self):
         return {cat for cat, v in self._cat_vars.items() if v.get()}
-
+ 
     def _redraw(self):
         self.canvas.delete("all")
         if not self.levels:
             self.info_lbl.config(text="No level loaded")
             return
-
+ 
         if self.ascii_mode.get():
             self._render_ascii()
             return
-
+ 
         lvl     = self.levels[self.current_idx]
         objects = lvl.get("objects", [])
         ground  = lvl.get("ground",  [])
         name    = lvl.get("name", f"Level {self.current_idx + 1}")
         ts      = self.tile_size
         active  = self._active_cats()
-
+ 
         # compute grid size from actual data
         max_tx = 40
         max_ty = 20
@@ -559,34 +566,32 @@ class MM2Viewer(tk.Tk):
         max_tx = min(max_tx, self.MAX_COLS) - 1
         max_ty = min(max_ty, self.MAX_ROWS)
         print(f"DEBUG max_tx={max_tx}  boundary_right={br}  boundary_cols={boundary_cols}")
-
+ 
         # compute theme/gamestyle early — needed for goal X and canvas width
         theme     = lvl.get("theme",     "overworld")
         gamestyle = lvl.get("gamestyle", "smb1")
         is_castle_axe = (theme == "castle" and gamestyle != "sm3dw")
         print(f"DEBUG _redraw: theme={repr(theme)}  gamestyle={repr(gamestyle)}  is_castle_axe={is_castle_axe}")
-
-        # Goal anchors to boundary_cols (true right edge). Fall back to max_tx.
-        anchor = boundary_cols if boundary_cols > 0 else max_tx
-
+ 
+        # goal_x_raw is in units of 1/10 tile — divide by 10 to get tile col.
+        goal_x_raw = int(lvl.get("goal_x_raw", 0))
+        goal_x_tile = goal_x_raw // 10 if goal_x_raw > 0 else 0
+ 
         if is_castle_axe:
-            goal_base_col = anchor - 10
+            goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 10
             max_tx = max(max_tx, goal_base_col + 2)
         else:
-            goal_base_col = anchor - 10
+            goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 9
             max_tx = goal_base_col + 11
             max_ty -= 1
-
-
-        
-
+ 
         W = max_tx * ts
         H = max_ty * ts
         self.canvas.config(scrollregion=(0, 0, W, H))
-
+ 
         # sky background
         self.canvas.create_rectangle(0, 0, W, H, fill="#5C94FC", outline="")
-
+ 
         # grid lines
         if self.show_grid.get():
             grid_color = "#888888" if ts > 10 else "#666666"
@@ -594,9 +599,9 @@ class MM2Viewer(tk.Tk):
                 self.canvas.create_line(col * ts, 0, col * ts, H, fill=grid_color)
             for row in range(max_ty + 1):
                 self.canvas.create_line(0, row * ts, W, row * ts, fill=grid_color)
-
+ 
         show_lbl = self.show_labels.get() and ts >= 14
-
+ 
         # ground tiles  (Y=0 game → bottom row on canvas)
         if self.show_ground.get() and CAT_TERRAIN in active:
             for g in ground:
@@ -612,7 +617,7 @@ class MM2Viewer(tk.Tk):
                     self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
                                             text=GROUND_CHAR, fill="#EDD090",
                                             font=("Courier", max(ts // 2, 7), "bold"))
-
+ 
         # objects
         if self.show_objects.get():
             for obj in objects:
@@ -634,7 +639,7 @@ class MM2Viewer(tk.Tk):
                     self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
                                             text=char, fill="white",
                                             font=("Courier", max(ts // 2, 7), "bold"))
-
+ 
         # ----------------------------------------------------------------
         # START GROUND  —  7 tiles wide, fills from row 0 up to start_y
         # (the game enforces this; no objects can be placed in this zone)
@@ -642,7 +647,7 @@ class MM2Viewer(tk.Tk):
         START_W    = 7
         start_ygame = lvl.get("start_y", 1)
         ground_color = GROUND_COLOR   # same brown used for regular ground
-
+ 
         for sc_col in range(START_W):
             if sc_col >= max_tx:
                 continue
@@ -660,7 +665,7 @@ class MM2Viewer(tk.Tk):
                     self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
                                             text="#", fill="#EDD090",
                                             font=("Courier", max(ts // 2, 7), "bold"))
-
+ 
         # spawn marker: green S on column 3 (centre of 7-wide zone), at start_y+1
         spawn_label_row = start_ygame
         if 3 < max_tx and spawn_label_row < max_ty:
@@ -671,15 +676,15 @@ class MM2Viewer(tk.Tk):
             self.canvas.create_text(sx + ts // 2, sy + ts // 2,
                                     text="S", fill="white",
                                     font=("Courier", max(ts // 2, 7), "bold"))
-
+ 
         # ----------------------------------------------------------------
         # GOAL — X is always 9 tiles from the right edge of the level.
         # Y comes from the header goal_y field.
         # ----------------------------------------------------------------
         GOAL_W = 11 if not is_castle_axe else 10
-
+ 
         goal_base_ygame = int(lvl.get("goal_y_raw", 0))
-
+ 
         # ---- goal ground: 10 tiles wide, filled from row 0 to goal_base_ygame ----
         for gc_col in range(GOAL_W):
             col_abs = goal_base_col + gc_col
@@ -697,9 +702,9 @@ class MM2Viewer(tk.Tk):
                     self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
                                             text="#", fill="#EDD090",
                                             font=("Courier", max(ts // 2, 7), "bold"))
-
+ 
         top_row = goal_base_ygame  # row Mario stands on at the goal
-
+ 
         if is_castle_axe:
             BRIDGE_W = 14
             bridge_row_canvas = max_ty - 1 - (goal_base_ygame - 1)
@@ -733,7 +738,7 @@ class MM2Viewer(tk.Tk):
                 self.canvas.create_text(fx0 + ts // 2, fy0 + ts // 2,
                                         text="G", fill="white",
                                         font=("Courier", max(ts // 2, 7), "bold"))
-
+ 
         self.info_lbl.config(
             text=f"[{self.current_idx + 1}/{len(self.levels)}]  {name}  |  "
                  f"style={gamestyle}  theme={theme}  |  "
@@ -741,9 +746,9 @@ class MM2Viewer(tk.Tk):
                  f"S=(0,{start_ygame})  "
                  f"G=({goal_base_col},{goal_base_ygame})  |  "
                  f"grid {max_tx}x{max_ty}")
-
+ 
     # ----------------------------------------------------------- ASCII mode --
-
+ 
     def _build_ascii_grid(self):
         lvl     = self.levels[self.current_idx]
         objects = lvl.get("objects", [])
@@ -751,7 +756,7 @@ class MM2Viewer(tk.Tk):
         theme     = lvl.get("theme",     "overworld")
         gamestyle = lvl.get("gamestyle", "smb1")
         is_castle_axe = (theme == "castle" and gamestyle != "sm3dw")
-
+ 
         max_tx = 40
         max_ty = 20
         for o in objects:
@@ -764,25 +769,26 @@ class MM2Viewer(tk.Tk):
         boundary_cols = (br // 16) if br > 0 else 0
         max_tx = min(max_tx, 240) - 1
         max_ty = min(max_ty, 28)
-        anchor = boundary_cols if boundary_cols > 0 else max_tx
+        goal_x_raw = int(lvl.get("goal_x_raw", 0))
+        goal_x_tile = goal_x_raw // 10 if goal_x_raw > 0 else 0
         if is_castle_axe:
-            goal_base_col = anchor - 10
+            goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 10
             max_tx = max(max_tx, goal_base_col + 2)
         else:
-            goal_base_col = anchor - 10
+            goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 9
             max_tx = goal_base_col + 11
             max_ty -= 1
-
+ 
         start_ygame     = lvl.get("start_y", 1)
         goal_base_ygame = int(lvl.get("goal_y_raw", 0))
         GOAL_W          = 11 if not is_castle_axe else 10
-
+ 
         grid = [["-"] * max_tx for _ in range(max_ty)]
-
+ 
         def set_cell(col, row_game, ch):
             if 0 <= col < max_tx and 0 <= row_game < max_ty:
                 grid[max_ty - 1 - row_game][col] = ch
-
+ 
         for g in ground:
             set_cell(g["x"], g["y"], "#")
         for obj in objects:
@@ -801,9 +807,9 @@ class MM2Viewer(tk.Tk):
             set_cell(goal_base_col, goal_base_ygame, "X")
         else:
             set_cell(goal_base_col + 1, goal_base_ygame, "G")
-
+ 
         return grid, max_tx, max_ty
-
+ 
     def _render_ascii(self):
         lvl  = self.levels[self.current_idx]
         name = lvl.get("name", f"Level {self.current_idx + 1}")
@@ -827,7 +833,7 @@ class MM2Viewer(tk.Tk):
                     fg = "#EEEEEE" if ch != "-" else "#333333"
                     self.canvas.create_text(x0+ts//2, y0+ts//2, text=ch, fill=fg, font=font)
         self.info_lbl.config(text=f"[{self.current_idx+1}/{len(self.levels)}]  {name}  [ASCII]  grid {max_tx}x{max_ty}")
-
+ 
     def _export_ascii(self):
         if not self.levels:
             messagebox.showwarning("No level", "Load a level first.")
@@ -846,9 +852,9 @@ class MM2Viewer(tk.Tk):
             for row in grid:
                 f.write("".join(row) + "\n")
         messagebox.showinfo("Exported", f"Saved to {path}")
-
+ 
     # --------------------------------------------------------------- tooltip --
-
+ 
     def _on_hover(self, event):
         if not self.levels:
             return
@@ -856,7 +862,7 @@ class MM2Viewer(tk.Tk):
         cx  = self.canvas.canvasx(event.x)
         cy  = self.canvas.canvasy(event.y)
         lvl = self.levels[self.current_idx]
-
+ 
         # recompute max_ty the same way _redraw does
         max_ty = 20
         for o in lvl.get("objects", []):
@@ -864,11 +870,11 @@ class MM2Viewer(tk.Tk):
         for g in lvl.get("ground", []):
             max_ty = max(max_ty, g["y"] + 2)
         max_ty = min(max_ty, self.MAX_ROWS)
-
+ 
         col        = int(cx // ts)
         row_canvas = int(cy // ts)
         row_game   = max_ty - 1 - row_canvas
-
+ 
         hits = []
         start_ygame_tip = lvl.get("start_y", 1)
         # start ground zone (cols 0-6, rows 0 to start_y)
@@ -886,10 +892,10 @@ class MM2Viewer(tk.Tk):
         for g in lvl.get("ground", []):
             if g["x"] == col and g["y"] == row_game:
                 hits.append(f"ground  tile={g.get('tile_id','?')}  bg={g.get('background_id','?')}  @({col},{row_game})")
-
+ 
         tip = "\n".join(hits) if hits else f"tile ({col}, {row_game})"
         self._show_tip(event.x_root, event.y_root, tip)
-
+ 
     def _show_tip(self, rx, ry, text):
         self._hide_tip()
         self._tooltip_win = tw = tk.Toplevel(self)
@@ -898,19 +904,19 @@ class MM2Viewer(tk.Tk):
         tk.Label(tw, text=text, justify=tk.LEFT,
                  background="#FFFFCC", relief=tk.SOLID, borderwidth=1,
                  font=("Courier", 9)).pack()
-
+ 
     def _hide_tip(self):
         if self._tooltip_win:
             self._tooltip_win.destroy()
             self._tooltip_win = None
-
+ 
     def _drag_start(self, event):
         self.canvas.scan_mark(event.x, event.y)
-
+ 
     def _drag_move(self, event):
         self.canvas.scan_dragto(event.x, event.y, gain=1)
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Dataset loader dialog
 # ---------------------------------------------------------------------------
@@ -920,43 +926,43 @@ class _DatasetDialog(tk.Toplevel):
         self.title("Load from HuggingFace dataset")
         self.result = None
         self.resizable(False, False)
-
+ 
         tk.Label(self, text="Keyword filter:").grid(row=0, column=0, sticky=tk.W, padx=8, pady=4)
         self.kw = tk.Entry(self, width=20)
         self.kw.insert(0, "kaizo")
         self.kw.grid(row=0, column=1, padx=4)
-
+ 
         tk.Label(self, text="Max levels:").grid(row=1, column=0, sticky=tk.W, padx=8)
         self.mx = tk.Entry(self, width=6)
         self.mx.insert(0, "5")
         self.mx.grid(row=1, column=1, sticky=tk.W, padx=4)
-
+ 
         self.status = tk.Label(self, text="", fg="gray")
         self.status.grid(row=2, column=0, columnspan=2, padx=8, pady=2)
-
+ 
         bf = tk.Frame(self)
         bf.grid(row=3, column=0, columnspan=2, pady=6)
         tk.Button(bf, text="Load",   command=self._do_load).pack(side=tk.LEFT, padx=4)
         tk.Button(bf, text="Cancel", command=self.destroy).pack(side=tk.LEFT)
         self.grab_set()
-
+ 
     def _do_load(self):
         keyword = self.kw.get().strip().lower()
         try:
             max_n = int(self.mx.get())
         except ValueError:
             max_n = 5
-
+ 
         self.status.config(text="Importing libraries...")
         self.update()
-
+ 
         try:
             from datasets import load_dataset
             from kaitaistruct import KaitaiStream
         except ImportError as e:
             messagebox.showerror("Missing library", str(e), parent=self)
             return
-
+ 
         # Load level.py from same folder as this script
         try:
             import importlib.util
@@ -969,15 +975,15 @@ class _DatasetDialog(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("level.py not found", str(e), parent=self)
             return
-
+ 
         self.status.config(text="Streaming dataset...")
         self.update()
-
+ 
         try:
             ds = load_dataset("TheGreatRambler/mm2_level", streaming=True, split="train")
             if keyword:
                 ds = ds.filter(lambda ex: keyword in ex["name"].lower())
-
+ 
             levels = []
             for ex in ds:
                 if len(levels) >= max_n:
@@ -990,21 +996,21 @@ class _DatasetDialog(tk.Toplevel):
                     levels.append(level_to_dict(lv, ex["name"]))
                 except Exception:
                     continue
-
+ 
             self.result = levels
             self.status.config(text=f"Done — {len(levels)} levels loaded.")
             self.update()
             self.after(800, self.destroy)
         except Exception as e:
             messagebox.showerror("Dataset error", str(e), parent=self)
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     app = MM2Viewer()
-
+ 
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
         try:
             with open(sys.argv[1]) as f:
@@ -1016,6 +1022,6 @@ if __name__ == "__main__":
             app.after(100, app._redraw)
         except Exception as e:
             print(f"Could not load {sys.argv[1]}: {e}")
-
+ 
     app.protocol("WM_DELETE_WINDOW", lambda: (app.destroy(), sys.exit(0)))
     app.mainloop()
