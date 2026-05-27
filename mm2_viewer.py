@@ -1,4 +1,269 @@
-
+# ---------------------------------------------------------------------------
+# Global ASCII-Based WFC Worker  (step-by-step, with pause/resume)
+# ---------------------------------------------------------------------------
+def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
+                             pause_event=None, cancel_event=None):
+    """
+    Runs WFC inside a subprocess, emitting real-time progress messages through
+    *q* so the UI can track collapse progress tile-by-tile, render partial
+    states, and let the user pause or cancel mid-generation.
+ 
+    The library (ikarth/wfc_2019f) exposes wfc_control.run() which accepts
+    callback hooks:
+      onChoice(row, col, pattern)  — fired once per cell *before* it is
+                                     collapsed.  We use this for step counting,
+                                     pause/cancel checks, and progress messages.
+      onObserve(wave)             — fired once per cell *after* collapse +
+                                     propagation.  We use this to build the
+                                     partial-snapshot that the UI renders.
+ 
+    Queue message protocol
+    ----------------------
+    ("PROGRESS", step, total_cells, partial_rows)
+        Sent every REPORT_EVERY steps while running.
+        Uncollapsed cells appear as "?" in partial_rows.
+ 
+    ("PAUSED", step, total_cells, partial_rows)
+        Sent once when the worker detects pause_event.  The worker then
+        busy-waits (50 ms ticks) until the flag is cleared or cancel fires.
+ 
+    ("SUCCESS", result_rows)
+        Fully-collapsed ASCII grid.
+ 
+    ("ERROR", traceback_string)
+        Unrecoverable failure or cancellation.
+ 
+    Correctness notes
+    -----------------
+    - output_size=[height, width]  — rows first, matching numpy convention.
+    - rotations=1 (zero-based: 0) — no rotations; platformer levels are
+      directional.  The library subtracts 1 internally, so we pass rotations=1
+      to execute_wfc but pass the already-adjusted value (0) directly to
+      make_pattern_catalog_with_rotations.
+    - output_periodic=False, input_periodic=False — levels are not toroidal.
+    - backtracking=False — fast; avoids near-certain timeout on large grids.
+    """
+    import time
+    import traceback as _tb
+    import threading
+ 
+    # Send a PROGRESS message every REPORT_EVERY collapsed cells.
+    # ~200 updates total feels smooth without drowning the IPC queue.
+    REPORT_EVERY = max(1, (out_w * out_h) // 200)
+ 
+    try:
+        from wfc import wfc_control, wfc_solver
+        import numpy as np
+ 
+        # ------------------------------------------------------------------ #
+        # 1.  Build training tensor  (H, W, 1) of int64 code-points          #
+        # ------------------------------------------------------------------ #
+        char_grid = np.array([list(row) for row in training_strings], dtype='U1')
+        int_grid  = np.vectorize(ord)(char_grid).astype(np.int64)
+        training_tensor = np.expand_dims(int_grid, axis=-1)   # (H, W, 1)
+ 
+        train_h, train_w = char_grid.shape
+        total_cells = out_w * out_h
+        print(f"[WFC Worker] Training shape: {train_w}w × {train_h}h  →  "
+              f"target {out_w}w × {out_h}h  ({total_cells} cells)")
+ 
+        # ------------------------------------------------------------------ #
+        # 2.  Replicate the setup pipeline from execute_wfc                  #
+        # ------------------------------------------------------------------ #
+        direction_offsets = list(enumerate([(0, -1), (1, 0), (0, 1), (-1, 0)]))
+ 
+        tile_catalog, tile_grid, _code_list, _unique_tiles = \
+            wfc_control.make_tile_catalog(training_tensor, tile_size=1)
+ 
+        # rotations=1 in execute_wfc's public API means "no extra rotations".
+        # execute_wfc does `rotations -= 1` before passing on, so the internal
+        # value is 0.  We call the internal function directly, so pass 0.
+        (pattern_catalog, pattern_weights,
+         pattern_list, pattern_grid) = \
+            wfc_control.make_pattern_catalog_with_rotations(
+                tile_grid,
+                pattern_width=pattern_width,
+                rotations=0,               # 0 = no rotations (already adjusted)
+                input_is_periodic=False,
+            )
+ 
+        adjacency_relations = wfc_control.adjacency_extraction(
+            pattern_grid,
+            pattern_catalog,
+            direction_offsets,
+            (pattern_width, pattern_width),
+        )
+ 
+        number_of_patterns = len(pattern_weights)
+        decode_patterns = dict(enumerate(pattern_list))
+        encode_patterns = {x: i for i, x in enumerate(pattern_list)}
+ 
+        adjacency_list = {}
+        for _, adjacency in direction_offsets:
+            adjacency_list[adjacency] = [set() for _ in pattern_weights]
+        for adjacency, pattern1, pattern2 in adjacency_relations:
+            adjacency_list[adjacency][encode_patterns[pattern1]].add(
+                encode_patterns[pattern2])
+ 
+        wave = wfc_control.makeWave(number_of_patterns, out_h, out_w, ground=None)
+        adjacency_matrix = wfc_control.makeAdj(adjacency_list)
+ 
+        encoded_weights = np.zeros(number_of_patterns, dtype=np.float64)
+        for w_id, w_val in pattern_weights.items():
+            encoded_weights[encode_patterns[w_id]] = w_val
+        choice_random_weighting = np.random.random_sample(wave.shape[1:]) * 0.1
+ 
+        location_heuristic = wfc_control.makeEntropyLocationHeuristic(
+            choice_random_weighting)
+        pattern_heuristic  = wfc_control.makeWeightedPatternHeuristic(
+            encoded_weights)
+ 
+        # ------------------------------------------------------------------ #
+        # 3.  Mutable state shared between callbacks and the main thread     #
+        # ------------------------------------------------------------------ #
+        state = {
+            "step":      0,
+            "wave_snap": None,   # most recent wave array (set in onObserve)
+        }
+        # threading.Event for in-process pause/resume (the multiprocessing
+        # Events are polled here in the callbacks which run on the solver thread)
+        local_pause  = threading.Event()
+        local_cancel = threading.Event()
+ 
+        def _wave_to_rows(w):
+            """Convert the boolean wave array → list[str] with '?' for
+            uncollapsed cells.  w shape: (num_patterns, out_h, out_w).
+ 
+            Decode chain:
+              encoded_index -> decode_patterns[idx] (pattern hash)
+                            -> pattern_catalog[hash][0,0] (top-left tile hash)
+                            -> tile_catalog[tile_hash][0,0,0] (pixel int)
+                            -> chr(pixel)
+            """
+            collapsed_mask = (np.sum(w, axis=0) == 1)   # (out_h, out_w) bool
+            chosen_ids     = np.argmax(w, axis=0)        # (out_h, out_w) int
+            rows = []
+            for r in range(out_h):
+                line = []
+                for c in range(out_w):
+                    if collapsed_mask[r, c]:
+                        enc_idx   = int(chosen_ids[r, c])
+                        pat_hash  = decode_patterns[enc_idx]
+                        tile_hash = pattern_catalog[pat_hash][0, 0]
+                        pixel     = tile_catalog[tile_hash][0, 0, 0]
+                        line.append(chr(int(pixel)))
+                    else:
+                        line.append("?")
+                rows.append("".join(line))
+            return rows
+ 
+        # onChoice fires BEFORE the cell is collapsed (row, col, pattern_id).
+        # This is the right place to check pause/cancel and emit progress.
+        def on_choice(row, col, pattern_id):
+            state["step"] += 1
+            step = state["step"]
+ 
+            # --- cancel check ---
+            if (cancel_event is not None and cancel_event.is_set()) \
+                    or local_cancel.is_set():
+                raise wfc_control.StopEarly("Cancelled by user.")
+ 
+            # --- pause check ---
+            if (pause_event is not None and pause_event.is_set()) \
+                    or local_pause.is_set():
+                # Build snapshot from last observed wave
+                snap = _wave_to_rows(state["wave_snap"]) \
+                    if state["wave_snap"] is not None \
+                    else ["?" * out_w for _ in range(out_h)]
+                collapsed = sum(1 for row in snap for ch in row if ch != "?")
+                pct = round(collapsed / max(total_cells, 1) * 100, 1)
+                print(f"[WFC Worker] ⏸  PAUSED at step {step}  "
+                      f"({collapsed}/{total_cells} = {pct}%)")
+                q.put(("PAUSED", collapsed, total_cells, snap))
+                # Busy-wait until unpaused or cancelled
+                while (pause_event is not None and pause_event.is_set()) \
+                        or local_pause.is_set():
+                    time.sleep(0.05)
+                    if (cancel_event is not None and cancel_event.is_set()) \
+                            or local_cancel.is_set():
+                        raise wfc_control.StopEarly("Cancelled during pause.")
+                print(f"[WFC Worker] ▶  RESUMED at step {step}")
+ 
+            # --- progress update ---
+            if step % REPORT_EVERY == 0 or step == 1:
+                snap = _wave_to_rows(state["wave_snap"]) \
+                    if state["wave_snap"] is not None \
+                    else ["?" * out_w for _ in range(out_h)]
+                collapsed = sum(1 for row in snap for ch in row if ch != "?")
+                pct = round(collapsed / max(total_cells, 1) * 100, 1)
+                print(f"[WFC Worker] Step {step:6d} | "
+                      f"{collapsed}/{total_cells} cells ({pct}%)")
+                q.put(("PROGRESS", collapsed, total_cells, snap))
+ 
+        # onObserve fires AFTER each collapse+propagation with the updated wave.
+        def on_observe(w):
+            state["wave_snap"] = w.copy()
+ 
+        # ------------------------------------------------------------------ #
+        # 4.  Run the solver (up to attempt_limit retries on contradiction)  #
+        # ------------------------------------------------------------------ #
+        attempt_limit = 10
+        solution = None
+        for attempt in range(1, attempt_limit + 1):
+            try:
+                solution = wfc_control.run(
+                    wave.copy(),
+                    adjacency_matrix,
+                    locationHeuristic=location_heuristic,
+                    patternHeuristic=pattern_heuristic,
+                    periodic=False,
+                    backtracking=False,
+                    onChoice=on_choice,
+                    onObserve=on_observe,
+                )
+                break   # success
+            except wfc_control.StopEarly as exc:
+                # User cancelled — propagate as ERROR and exit cleanly
+                q.put(("ERROR", f"Cancelled: {exc}"))
+                return
+            except wfc_control.Contradiction:
+                print(f"[WFC Worker] Contradiction on attempt {attempt}/"
+                      f"{attempt_limit} — retrying…")
+                state["step"]     = 0
+                state["wave_snap"] = None
+                wave_retry = wfc_control.makeWave(
+                    number_of_patterns, out_h, out_w, ground=None)
+                wave = wave_retry   # reassign for clarity; used in next iter
+                if attempt == attempt_limit:
+                    raise wfc_control.TimedOut("All attempts exhausted.")
+            except wfc_control.TimedOut:
+                raise
+ 
+        # ------------------------------------------------------------------ #
+        # 5.  Decode the integer solution → ASCII rows                       #
+        # ------------------------------------------------------------------ #
+        # solution shape: (out_h, out_w), values are encoded pattern indices.
+        # Decode chain: encoded_idx -> pattern hash -> top-left tile hash
+        #               -> tile pixel value -> chr()
+        result_strings = []
+        for r in range(out_h):
+            line = []
+            for c in range(out_w):
+                enc_idx   = int(solution[r, c])
+                pat_hash  = decode_patterns[enc_idx]
+                tile_hash = pattern_catalog[pat_hash][0, 0]
+                pixel     = tile_catalog[tile_hash][0, 0, 0]
+                line.append(chr(int(pixel)))
+            result_strings.append("".join(line))
+ 
+        print(f"[WFC Worker] ✓ Done — {len(result_strings)} rows × "
+              f"{len(result_strings[0]) if result_strings else 0} cols  "
+              f"after {state['step']} steps")
+        q.put(("SUCCESS", result_strings))
+ 
+    except Exception as exc:
+        q.put(("ERROR", f"{str(exc)}\n{_tb.format_exc()}"))
+ 
 """
 MM2 Level Viewer
 ================
@@ -23,7 +288,15 @@ from io import BytesIO
 from level import Level
 import zlib
 import math
-
+import sys
+import os
+import numpy as np
+import multiprocessing
+import queue as _queue
+ 
+ 
+sys.path.append(os.path.join(os.path.dirname(__file__), "wfc_2019f"))
+ 
  
 # ---------------------------------------------------------------------------
 # ObjId integer → name  (matches level.py ObjId enum exactly)
@@ -393,6 +666,10 @@ class MM2Viewer(tk.Tk):
         self._cat_vars    = {}   # cat → BooleanVar
         self._tooltip_win = None
  
+        # WFC output size — 0 means "auto: derive from the current level"
+        self.wfc_width  = tk.IntVar(value=200)
+        self.wfc_height = tk.IntVar(value=20)
+ 
         self._build_ui()
  
     # ------------------------------------------------------------------ UI --
@@ -420,6 +697,21 @@ class MM2Viewer(tk.Tk):
         tk.Checkbutton(tb, text="ASCII mode", variable=self.ascii_mode,
                        command=self._redraw).pack(side=tk.LEFT, padx=4)
         tk.Button(tb, text="Export ASCII", command=self._export_ascii).pack(side=tk.LEFT, padx=2)
+ 
+        ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        tk.Label(tb, text="WFC W:").pack(side=tk.LEFT)
+        self._wfc_w_spin = tk.Spinbox(
+            tb, from_=0, to=240, textvariable=self.wfc_width,
+            width=4, justify=tk.CENTER)
+        self._wfc_w_spin.pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(tb, text="H:").pack(side=tk.LEFT)
+        self._wfc_h_spin = tk.Spinbox(
+            tb, from_=0, to=28, textvariable=self.wfc_height,
+            width=3, justify=tk.CENTER)
+        self._wfc_h_spin.pack(side=tk.LEFT, padx=(0, 2))
+        tk.Label(tb, text="(200,20=auto)", fg="#888888",
+                 font=("TkDefaultFont", 7)).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(tb, text="Generate WFC Level", command=self._run_wfc_generation).pack(side=tk.LEFT, padx=4)
  
         # category filter bar
         fb = tk.Frame(self)
@@ -504,6 +796,449 @@ class MM2Viewer(tk.Tk):
         self.levels = [level_to_dict(level, name)]
         self.current_idx = 0
         self._redraw()
+    
+    # -------------------------------------------------------------- WFC async --
+ 
+    def apply_wfc_generation(self, current_level_dict,
+                              override_width=None, override_height=None):
+        """
+        Build the training canvas and return everything _launch_wfc_async needs:
+          (training_strings, gen_width, gen_height, current_level_dict)
+ 
+        override_width / override_height (int > 0):
+            Force the output to exactly this many tiles.  Pass None or 0 to
+            fall back to the original auto-sizing behaviour (derived from the
+            current level's boundary_right / object extents).
+        """
+        training_levels = self.levels if (hasattr(self, "levels") and self.levels) else [current_level_dict]
+ 
+        # 1. Vertical bounds
+        all_y_coords = [0]
+        for lvl in training_levels:
+            for g in lvl.get("ground", []):
+                all_y_coords.append(g["y"])
+            for o in lvl.get("objects", []):
+                all_y_coords.append(o["y"] // 160)
+ 
+        min_y          = max(0, min(all_y_coords))
+        max_y          = max(all_y_coords)
+        dynamic_height = max(15, (max_y - min_y) + 3)
+ 
+        # 2. Per-level tile widths
+        def _level_tile_width(lvl):
+            br = lvl.get("boundary_right", 0)
+            if br > 0:
+                return max(40, br // 16)
+            w = 40
+            for o in lvl.get("objects", []):
+                w = max(w, o["x"] // 160 + 2)
+            for g in lvl.get("ground", []):
+                w = max(w, g["x"] + 2)
+            return min(w, self.MAX_COLS)
+ 
+        # 3. Concatenated training canvas
+        col_offsets  = []
+        total_width  = 0
+        for lvl in training_levels:
+            col_offsets.append(total_width)
+            total_width += _level_tile_width(lvl) + 1
+ 
+        ascii_canvas = [["." for _ in range(total_width)] for _ in range(dynamic_height)]
+ 
+        def _canvas_row(ty_game):
+            return (dynamic_height - 1) - (ty_game - min_y)
+ 
+        for idx, lvl in enumerate(training_levels):
+            x_off = col_offsets[idx]
+            lvl_w = _level_tile_width(lvl)
+            for g in lvl.get("ground", []):
+                tx, ty = g["x"], g["y"]
+                if tx >= lvl_w:
+                    continue
+                row = _canvas_row(ty)
+                if 0 <= row < dynamic_height:
+                    ascii_canvas[row][tx + x_off] = "#"
+            for o in lvl.get("objects", []):
+                tx = o["x"] // 160
+                ty = o["y"] // 160
+                if tx >= lvl_w:
+                    continue
+                row = _canvas_row(ty)
+                if 0 <= row < dynamic_height:
+                    name_str = obj_id_to_str(o.get("id", 0))
+                    ch = ASCII_MAP.get(name_str, "?")
+                    if ascii_canvas[row][tx + x_off] == ".":
+                        ascii_canvas[row][tx + x_off] = ch
+ 
+        training_strings = ["".join(row) for row in ascii_canvas]
+ 
+        # Auto-size from current level, then apply any user override
+        auto_width  = _level_tile_width(current_level_dict)
+        auto_height = dynamic_height
+        gen_width   = int(override_width)  if (override_width  and int(override_width)  > 0) else auto_width
+        gen_height  = int(override_height) if (override_height and int(override_height) > 0) else auto_height
+ 
+        # Clamp to legal SMM2 limits
+        gen_width  = max(40,  min(gen_width,  self.MAX_COLS))
+        gen_height = max(5,   min(gen_height, self.MAX_ROWS))
+ 
+        print(f"[ASCII WFC] Training canvas: {total_width}w x {dynamic_height}h")
+        print(f"[ASCII WFC] Output target:   {gen_width}w x {gen_height}h")
+ 
+        # Store min_y on the dict so _decode_wfc_result can use it
+        current_level_dict["_wfc_min_y"] = min_y
+ 
+        return training_strings, gen_width, gen_height, current_level_dict
+ 
+    def _decode_wfc_result(self, generated_rows, current_level_dict):
+        """Turn WFC ASCII output back into ground + object lists.
+ 
+        After decoding the raw WFC grid, two spawn-safety passes are applied
+        before any objects are committed:
+ 
+        Pass 1 — Clear zone (7 × 3 rectangle around the spawn point)
+            Mario spawns at tile column 3 (centre of the 7-wide start zone),
+            at game-row start_y.  The 7-wide × 3-tall rectangle centred on
+            that column, spanning game rows [start_y .. start_y+2], must be
+            completely empty — no blocks, items, or enemies.
+ 
+        Pass 2 — Foundation column beneath the spawn point
+            Every tile in column 3 below game-row start_y down to game-row 0
+            is forced to solid ground ('#'), so Mario can never fall into a
+            pit immediately on spawn.
+        """
+        actual_w   = len(generated_rows[0]) if generated_rows else 0
+        actual_h   = len(generated_rows)
+        min_y      = current_level_dict.pop("_wfc_min_y", 0)
+        gen_height = actual_h
+ 
+        print(f"[ASCII WFC] Received output {actual_w}w x {actual_h}h")
+ 
+        # Work on a mutable 2-D list so we can apply the spawn constraints
+        # before iterating.  Rows are canvas-ordered (row 0 = top of screen).
+        grid = [list(row_str) for row_str in generated_rows]
+ 
+        # Helper: convert game-Y (0 = bottom) ↔ canvas row (0 = top)
+        def game_y_to_row(gy):
+            return (gen_height - 1) - (gy - min_y)
+ 
+        start_y     = current_level_dict.get("start_y", 1)
+        spawn_col   = 3          # fixed: Mario always spawns at tile column 3
+        clear_half  = 3          # 3 tiles left + spawn + 3 tiles right = 7 wide
+        clear_above = 2          # spawn row + 2 rows above = 3 tall total
+ 
+        # ------------------------------------------------------------------ #
+        # Pass 1: enforce 7 × 3 clear zone                                   #
+        # ------------------------------------------------------------------ #
+        # Game rows that must be empty: start_y (spawn row) and the two rows
+        # directly above it (start_y+1, start_y+2).
+        for dy in range(clear_above + 1):          # 0, 1, 2
+            gy  = start_y + dy
+            row = game_y_to_row(gy)
+            if not (0 <= row < gen_height):
+                continue
+            for dc in range(-clear_half, clear_half + 1):   # -3 … +3
+                col = spawn_col + dc
+                if 0 <= col < actual_w:
+                    grid[row][col] = "."
+ 
+        clear_count = (clear_half * 2 + 1) * (clear_above + 1)
+        print(f"[Spawn] Cleared {clear_half*2+1}×{clear_above+1} zone "
+              f"at col {spawn_col - clear_half}–{spawn_col + clear_half}, "
+              f"game-y {start_y}–{start_y + clear_above}  "
+              f"({clear_count} cells forced empty)")
+ 
+        # ------------------------------------------------------------------ #
+        # Pass 2: enforce solid foundation below the spawn column            #
+        # ------------------------------------------------------------------ #
+        foundation_placed = 0
+        for gy in range(0, start_y):               # game rows below spawn
+            row = game_y_to_row(gy)
+            if not (0 <= row < gen_height):
+                continue
+            if grid[row][spawn_col] != "#":
+                grid[row][spawn_col] = "#"
+                foundation_placed += 1
+ 
+        print(f"[Spawn] Placed {foundation_placed} foundation blocks "
+              f"in column {spawn_col} below game-y {start_y}")
+ 
+        # ------------------------------------------------------------------ #
+        # Convert the patched grid → objects + ground lists                  #
+        # ------------------------------------------------------------------ #
+        current_level_dict["objects"] = []
+        current_level_dict["ground"]  = []
+ 
+        for r, row_cells in enumerate(grid):
+            game_y = (gen_height - 1 - r) + min_y
+            for c, char in enumerate(row_cells):
+                if char == "#":
+                    current_level_dict["ground"].append({
+                        "x": c, "y": game_y,
+                        "tile_id": 0, "background_id": 0,
+                    })
+                elif char not in (".", "-", " "):
+                    obj_id_str = None
+                    for name, ch in ASCII_MAP.items():
+                        if ch == char and name not in ("ground", "_ground_tile"):
+                            for int_id, int_name in OBJID_INT_TO_STR.items():
+                                if int_name == name:
+                                    obj_id_str = str(int_id)
+                                    break
+                            if obj_id_str is not None:
+                                break
+                    if obj_id_str is not None:
+                        current_level_dict["objects"].append({
+                            "x": c * 160, "y": game_y * 160, "id": obj_id_str
+                        })
+ 
+        current_level_dict["boundary_right"] = actual_w * 16
+        return current_level_dict
+ 
+    def _launch_wfc_async(self, base_level):
+        """
+        Build the training data, spawn the WFC subprocess, show the progress
+        dialog, and start the poll loop.  Returns immediately — the UI stays
+        fully responsive.
+ 
+        Two multiprocessing.Event objects are passed to the worker:
+          _wfc_pause_event  — set to pause, cleared to resume
+          _wfc_cancel_event — set to request clean cancellation
+        """
+        import time
+ 
+        # Read user-specified dimensions (0 = auto)
+        try:
+            user_w = self.wfc_width.get()
+        except Exception:
+            user_w = 0
+        try:
+            user_h = self.wfc_height.get()
+        except Exception:
+            user_h = 0
+ 
+        # Build canvas (fast, in-process)
+        training_strings, gen_width, gen_height, base_level = \
+            self.apply_wfc_generation(base_level,
+                                      override_width=user_w or None,
+                                      override_height=user_h or None)
+ 
+        ctx = multiprocessing.get_context("spawn")
+ 
+        # Shared control flags
+        self._wfc_pause_event  = ctx.Event()
+        self._wfc_cancel_event = ctx.Event()
+        result_queue = ctx.Queue()
+ 
+        wfc_process = ctx.Process(
+            target=global_ascii_wfc_worker,
+            args=(training_strings, result_queue,
+                  int(gen_width), int(gen_height), 2,
+                  self._wfc_pause_event, self._wfc_cancel_event),
+        )
+        wfc_process.start()
+ 
+        WFC_TIMEOUT = 20000.0
+        start_time  = time.monotonic()
+ 
+        # Progress dialog — now includes Pause/Resume button
+        dlg = _WFCProgressDialog(
+            self, gen_width, gen_height,
+            on_cancel=lambda: self._cancel_wfc(wfc_process, result_queue),
+            on_pause=self._toggle_wfc_pause,
+        )
+        self._wfc_dlg = dlg   # keep reference for toggle
+ 
+        # Kick off the polling loop
+        self.after(100, self._poll_wfc,
+                   wfc_process, result_queue, base_level,
+                   dlg, start_time, WFC_TIMEOUT)
+ 
+    def _toggle_wfc_pause(self):
+        """Called by the Pause/Resume button in the progress dialog."""
+        if not hasattr(self, "_wfc_pause_event"):
+            return
+        if self._wfc_pause_event.is_set():
+            print("[WFC UI] \u25b6 Resuming generation\u2026")
+            self._wfc_pause_event.clear()
+            if hasattr(self, "_wfc_dlg") and self._wfc_dlg.winfo_exists():
+                self._wfc_dlg.set_paused(False)
+        else:
+            print("[WFC UI] \u23f8 Pausing generation\u2026")
+            self._wfc_pause_event.set()
+            if hasattr(self, "_wfc_dlg") and self._wfc_dlg.winfo_exists():
+                self._wfc_dlg.set_paused(True)
+ 
+    def _cancel_wfc(self, wfc_process, result_queue):
+        """User pressed Cancel in the progress dialog."""
+        print("[WFC UI] Cancelling generation\u2026")
+        if hasattr(self, "_wfc_cancel_event"):
+            self._wfc_cancel_event.set()
+        # Also clear the pause flag so the worker can see the cancel
+        if hasattr(self, "_wfc_pause_event"):
+            self._wfc_pause_event.clear()
+        try:
+            wfc_process.terminate()
+        except Exception:
+            pass
+ 
+    def _poll_wfc(self, wfc_process, result_queue, base_level,
+                  dlg, start_time, timeout):
+        """
+        Called every 100 ms via after().  Drains *all* messages currently in
+        the queue each tick so the UI stays in sync with the worker, then
+        reschedules itself until the worker is done or the dialog is closed.
+ 
+        Message handling
+        ----------------
+        PROGRESS  -> update progress bar + render partial level grid
+        PAUSED    -> reflect paused state in dialog; render snapshot
+        SUCCESS   -> decode final result, refresh main canvas, close dialog
+        ERROR     -> show error in dialog
+        """
+        import time
+ 
+        # If the dialog was closed (user cancelled), clean up and stop.
+        if not dlg.winfo_exists():
+            self._cancel_wfc(wfc_process, result_queue)
+            wfc_process.join(timeout=3)
+            return
+ 
+        elapsed = time.monotonic() - start_time
+ 
+        # Drain all pending messages this tick
+        last_msg = None
+        while True:
+            try:
+                msg = result_queue.get_nowait()
+                last_msg = msg
+            except _queue.Empty:
+                break
+ 
+        if last_msg is not None:
+            kind = last_msg[0]
+ 
+            if kind == "PROGRESS":
+                _, step, total, partial_rows = last_msg
+                pct = round(step / max(total, 1) * 100, 1)
+                dlg.set_progress(pct)
+                dlg.set_status(
+                    f"Collapsing\u2026  {step}/{total} cells  ({pct}%)  "
+                    f"[{elapsed:.0f}s elapsed]"
+                )
+                print(f"[WFC UI] Progress: {step}/{total} cells ({pct}%)  elapsed={elapsed:.1f}s")
+                # Live preview — show partial WFC state on the main canvas
+                self._render_wfc_partial(partial_rows, base_level)
+ 
+            elif kind == "PAUSED":
+                _, step, total, partial_rows = last_msg
+                pct = round(step / max(total, 1) * 100, 1)
+                dlg.set_status(f"\u23f8  Paused at {step}/{total} cells ({pct}%)")
+                dlg.set_paused(True)
+                self._render_wfc_partial(partial_rows, base_level)
+                print(f"[WFC UI] Worker confirmed pause at step {step}.")
+ 
+            elif kind == "SUCCESS":
+                _, payload = last_msg
+                wfc_process.join(timeout=5)
+                if wfc_process.is_alive():
+                    wfc_process.kill()
+ 
+                dlg.set_status("Decoding output\u2026")
+                dlg.set_progress(99)
+                self.update_idletasks()
+ 
+                generated_level = self._decode_wfc_result(payload, base_level)
+                self.levels      = [generated_level]
+                self.current_idx = 0
+ 
+                dlg.set_status(f"\u2713 Done!  ({elapsed:.1f}s)")
+                dlg.set_progress(100)
+                dlg.finish()
+                print(f"[WFC UI] Generation complete in {elapsed:.1f}s.")
+                self._redraw()
+                return   # stop polling
+ 
+            elif kind == "ERROR":
+                _, payload = last_msg
+                wfc_process.join(timeout=5)
+                if wfc_process.is_alive():
+                    wfc_process.kill()
+ 
+                print(f"[WFC Error]:\n{payload}")
+                dlg.set_status("WFC failed \u2014 see console for details.", error=True)
+                dlg.set_progress(100)
+                dlg.finish()
+                return   # stop polling
+ 
+        # Check for timeout
+        if elapsed >= timeout:
+            dlg.set_status(f"Timed out after {timeout:.0f}s", error=True)
+            dlg.set_progress(100)
+            self._cancel_wfc(wfc_process, result_queue)
+            wfc_process.join(timeout=3)
+            dlg.finish()
+            return
+ 
+        # If no terminal message yet, reschedule.
+        # While paused we poll less frequently to save CPU.
+        interval = 300 if (hasattr(self, "_wfc_pause_event") and
+                           self._wfc_pause_event.is_set()) else 100
+        self.after(interval, self._poll_wfc,
+                   wfc_process, result_queue, base_level,
+                   dlg, start_time, timeout)
+ 
+    def _render_wfc_partial(self, partial_rows, base_level):
+        """
+        Render a partial WFC state onto the main canvas so the user can watch
+        the algorithm collapse in real time.  Uncollapsed cells ('?') are drawn
+        in dim purple to distinguish them from final tiles.
+        """
+        if not partial_rows:
+            return
+ 
+        out_h = len(partial_rows)
+        out_w = len(partial_rows[0]) if partial_rows else 0
+        if out_w == 0:
+            return
+ 
+        ts   = self.tile_size
+        W    = out_w * ts
+        H    = out_h * ts
+        self.canvas.delete("all")
+        self.canvas.config(scrollregion=(0, 0, W, H))
+        # Dark background for in-progress view
+        self.canvas.create_rectangle(0, 0, W, H, fill="#111122", outline="")
+ 
+        show_lbl = self.show_labels.get() and ts >= 14
+        font     = ("Courier", max(ts // 2, 7), "bold")
+ 
+        for row_canvas, row_str in enumerate(partial_rows):
+            for col, ch in enumerate(row_str):
+                x0, y0 = col * ts, row_canvas * ts
+                if ch == "?":
+                    bg, fg = "#2A1A3E", "#7755AA"   # uncollapsed — dim purple
+                elif ch == "#":
+                    bg, fg = "#8B6914", "#EDD090"   # ground
+                elif ch == ".":
+                    bg, fg = "#111122", "#333355"   # empty air
+                else:
+                    bg, fg = "#1A2A3E", "#88BBFF"   # any other object
+ 
+                self.canvas.create_rectangle(x0, y0, x0 + ts, y0 + ts,
+                                             fill=bg, outline="")
+                if show_lbl and ts >= 10:
+                    self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
+                                            text=ch, fill=fg, font=font)
+ 
+        collapsed = sum(1 for row in partial_rows for ch in row if ch != "?")
+        total     = out_w * out_h
+        pct       = round(collapsed / max(total, 1) * 100, 1)
+        self.info_lbl.config(
+            text=f"[WFC in progress]  {collapsed}/{total} cells collapsed ({pct}%)"
+                 f"  \u2014  {out_w}\u00d7{out_h} grid"
+        )
+        self.update_idletasks()
  
     # ------------------------------------------------------------ navigation --
     def _prev(self):
@@ -528,6 +1263,18 @@ class MM2Viewer(tk.Tk):
     def _on_zoom(self):
         self.tile_size = self.zoom_var.get()
         self._redraw()
+ 
+    def _run_wfc_generation(self):
+        if self.levels:
+            base_level = self.levels[self.current_idx].copy()
+        else:
+            base_level = {
+                "name": "WFC Generated Level", "gamestyle": "smb1", "theme": "overworld",
+                "start_y": 1, "goal_x_raw": 0, "goal_y_raw": 0, "boundary_right": 0,
+                "objects": [], "ground": [], "subworld_objects": [], "subworld_ground": []
+            }
+        print("Button clicked: Starting WFC pipeline...")
+        self._launch_wfc_async(base_level)
  
     # --------------------------------------------------------------- drawing --
     def _active_cats(self):
@@ -915,6 +1662,135 @@ class MM2Viewer(tk.Tk):
  
     def _drag_move(self, event):
         self.canvas.scan_dragto(event.x, event.y, gain=1)
+ 
+ 
+# ---------------------------------------------------------------------------
+# WFC Progress Dialog
+# ---------------------------------------------------------------------------
+class _WFCProgressDialog(tk.Toplevel):
+    """
+    Non-blocking progress window shown while the WFC subprocess runs.
+ 
+    Phases displayed:
+      - "Building training canvas..."  (shown immediately on open)
+      - "Collapsing... N/T cells (X%)" (updated every 100 ms by _poll_wfc)
+      - "⏸ Paused at N/T cells (X%)"  (while worker is paused)
+      - "Decoding output..."           (briefly, after SUCCESS received)
+      - "✓ Done! (X.Xs)"              (final state before auto-close)
+      - Error messages shown in red
+ 
+    Progress bar tracks real tile-collapse count (0–100 %).
+    A Pause/Resume button lets the user halt the algorithm mid-run without
+    losing any already-collapsed cells.
+    """
+ 
+    _CLOSE_DELAY_MS = 1500   # how long to leave "Done!" visible before closing
+ 
+    def __init__(self, parent, gen_width, gen_height, on_cancel, on_pause=None):
+        super().__init__(parent)
+        self.title("WFC Generation")
+        self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._on_cancel  = on_cancel
+        self._on_pause   = on_pause    # callable; toggled by Pause/Resume btn
+        self._cancelled  = False
+        self._finished   = False
+        self._is_paused  = False
+ 
+        # ---- layout ----
+        pad = dict(padx=16, pady=6)
+ 
+        tk.Label(self, text="Wave Function Collapse",
+                 font=("TkDefaultFont", 11, "bold")).pack(**pad)
+ 
+        info_text = f"Output size:  {gen_width} \u00d7 {gen_height} tiles"
+        tk.Label(self, text=info_text, fg="#555555").pack(pady=(0, 4))
+ 
+        self._bar = ttk.Progressbar(self, orient=tk.HORIZONTAL,
+                                    length=400, mode="determinate")
+        self._bar.pack(padx=16, pady=4)
+        self._bar["maximum"] = 100
+        self._bar["value"]   = 0
+ 
+        self._status_var = tk.StringVar(value="Building training canvas\u2026")
+        self._status_lbl = tk.Label(self, textvariable=self._status_var,
+                                    width=52, anchor=tk.W, fg="#222222")
+        self._status_lbl.pack(padx=16, pady=(2, 6))
+ 
+        # Button row: Pause/Resume  +  Cancel
+        btn_frame = tk.Frame(self)
+        btn_frame.pack(pady=(0, 12))
+ 
+        self._pause_btn = tk.Button(btn_frame, text="\u23f8 Pause", width=12,
+                                    command=self._on_pause_click,
+                                    state=tk.NORMAL if on_pause else tk.DISABLED)
+        self._pause_btn.pack(side=tk.LEFT, padx=6)
+        # Snapshot the OS-default colors now, before any state changes
+        self._default_btn_bg  = self._pause_btn.cget("bg")
+        self._default_btn_abg = self._pause_btn.cget("activebackground")
+ 
+        self._cancel_btn = tk.Button(btn_frame, text="Cancel", width=10,
+                                     command=self._on_close)
+        self._cancel_btn.pack(side=tk.LEFT, padx=6)
+ 
+        # Centre over parent
+        self.transient(parent)
+        self.grab_set()
+        self.update_idletasks()
+        pw = parent.winfo_rootx() + parent.winfo_width()  // 2
+        ph = parent.winfo_rooty() + parent.winfo_height() // 2
+        w  = self.winfo_reqwidth()
+        h  = self.winfo_reqheight()
+        self.geometry(f"+{pw - w // 2}+{ph - h // 2}")
+ 
+    # ---- public API called by _poll_wfc ----------------------------------- #
+ 
+    def set_status(self, text, error=False):
+        self._status_var.set(text)
+        self._status_lbl.config(fg="#CC2222" if error else "#222222")
+        self.update_idletasks()
+ 
+    def set_progress(self, pct):
+        """Set the bar to *pct* (0–100), clipped."""
+        self._bar["value"] = max(0.0, min(100.0, float(pct)))
+        self.update_idletasks()
+ 
+    def set_paused(self, paused: bool):
+        """Reflect the paused/running state visually."""
+        self._is_paused = paused
+        if paused:
+            self._pause_btn.config(text="\u25b6 Resume", bg="#ffe066",
+                                   activebackground="#ffd633")
+        else:
+            self._pause_btn.config(text="\u23f8 Pause",
+                                   bg=self._default_btn_bg,
+                                   activebackground=self._default_btn_abg)
+        self.update_idletasks()
+ 
+    def finish(self):
+        """Switch Cancel button to Close and schedule auto-destroy."""
+        self._finished = True
+        if self.winfo_exists():
+            self._pause_btn.config(state=tk.DISABLED)
+            self._cancel_btn.config(text="Close")
+            self.after(self._CLOSE_DELAY_MS, self._safe_destroy)
+ 
+    # ---- internals -------------------------------------------------------- #
+ 
+    def _on_pause_click(self):
+        if self._on_pause:
+            self._on_pause()
+ 
+    def _on_close(self):
+        if not self._finished:
+            self._cancelled = True
+            self._on_cancel()
+        self._safe_destroy()
+ 
+    def _safe_destroy(self):
+        if self.winfo_exists():
+            self.grab_release()
+            self.destroy()
  
  
 # ---------------------------------------------------------------------------
