@@ -20,11 +20,9 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import json, sys, os, zlib
 from io import BytesIO
-from datasets import load_dataset
-from kaitaistruct import KaitaiStream
-from io import BytesIO
 from level import Level
 import zlib
+import math
 
  
 # ---------------------------------------------------------------------------
@@ -556,7 +554,7 @@ class MM2Viewer(tk.Tk):
         max_tx = 40
         max_ty = 20
         for o in objects:
-            max_tx = max(max_tx, o["x"] // self.TILE_PX + 2)
+            max_tx = max(max_tx, int(math.ceil(o["x"] / self.TILE_PX)) + 2)
             max_ty = max(max_ty, o["y"] // self.TILE_PX + 2)
         for g in ground:
             max_tx = max(max_tx, g["x"] + 2)
@@ -575,14 +573,14 @@ class MM2Viewer(tk.Tk):
  
         # goal_x_raw is in units of 1/10 tile — divide by 10 to get tile col.
         goal_x_raw = int(lvl.get("goal_x_raw", 0))
-        goal_x_tile = goal_x_raw // 10 if goal_x_raw > 0 else 0
+        goal_x_tile = math.ceil(goal_x_raw // 10) if goal_x_raw > 0 else 0
  
         if is_castle_axe:
             goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 10
             max_tx = max(max_tx, goal_base_col + 2)
         else:
             goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 9
-            max_tx = goal_base_col + 11
+            max_tx = goal_base_col + 10
             max_ty -= 1
  
         W = max_tx * ts
@@ -625,7 +623,7 @@ class MM2Viewer(tk.Tk):
                 char, color, cat = get_meta(name_str)
                 if cat not in active:
                     continue
-                col      = obj["x"] // self.TILE_PX
+                col      = int(math.ceil(obj["x"] // self.TILE_PX))
                 row_game = obj["y"] // self.TILE_PX
                 if col >= max_tx or row_game >= max_ty:
                     continue
@@ -729,7 +727,7 @@ class MM2Viewer(tk.Tk):
                                         text="X", fill="white",
                                         font=("Courier", max(ts // 2, 7), "bold"))
         else:
-            flag_col = goal_base_col + 1
+            flag_col = goal_base_col 
             if flag_col < max_tx and top_row < max_ty:
                 fx0 = flag_col * ts
                 fy0 = (max_ty - 1 - top_row) * ts
@@ -770,7 +768,7 @@ class MM2Viewer(tk.Tk):
         max_tx = min(max_tx, 240) - 1
         max_ty = min(max_ty, 28)
         goal_x_raw = int(lvl.get("goal_x_raw", 0))
-        goal_x_tile = goal_x_raw // 10 if goal_x_raw > 0 else 0
+        goal_x_tile = math.ceil(goal_x_raw // 10) if goal_x_raw > 0 else 0
         if is_castle_axe:
             goal_base_col = goal_x_tile if goal_x_tile > 0 else max_tx - 10
             max_tx = max(max_tx, goal_base_col + 2)
@@ -793,6 +791,7 @@ class MM2Viewer(tk.Tk):
             set_cell(g["x"], g["y"], "#")
         for obj in objects:
             ch = ASCII_MAP.get(obj_id_to_str(obj["id"]), "?")
+            # Replace math.ceil with standard floor division to eliminate the +1 tile offset
             set_cell(obj["x"] // 160, obj["y"] // 160, ch)
         for col in range(7):
             for row in range(0, start_ygame):
@@ -806,7 +805,7 @@ class MM2Viewer(tk.Tk):
                 set_cell(goal_base_col - 14 + b, goal_base_ygame - 1, "=")
             set_cell(goal_base_col, goal_base_ygame, "X")
         else:
-            set_cell(goal_base_col + 1, goal_base_ygame, "G")
+            set_cell(goal_base_col, goal_base_ygame, "G")
  
         return grid, max_tx, max_ty
  
@@ -886,7 +885,8 @@ class MM2Viewer(tk.Tk):
         # goal objects
         for o in lvl.get("objects", []):
             id_str = obj_id_to_str(o["id"])
-            if o["x"] // self.TILE_PX == col and o["y"] // self.TILE_PX == row_game:
+            obj_col = int(math.ceil(o["x"] / self.TILE_PX))
+            if obj_col == col and o["y"] // self.TILE_PX == row_game:
                 prefix = "GOAL " if id_str in ("goal", "goal_ground") else "obj"
                 hits.append(f"{prefix}: {id_str}  px({o['x']},{o['y']})")
         for g in lvl.get("ground", []):
