@@ -10,33 +10,6 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
     Runs WFC inside a subprocess, emitting real-time progress messages through
     *q* so the UI can track collapse progress tile-by-tile, render partial
     states, and let the user pause or cancel mid-generation.
-
-    Parameters
-    ----------
-    training_strings  : list[str]  ASCII rows from the training canvas
-    q                 : multiprocessing.Queue  IPC channel back to the UI
-    out_w, out_h      : int   output grid dimensions in tiles
-    pattern_width     : int   WFC neighbourhood size (2 = 2×2 patterns, etc.)
-    pause_event       : mp.Event  set to pause, clear to resume
-    cancel_event      : mp.Event  set to cancel cleanly
-    attempt_limit     : int   how many contradiction retries before giving up
-    backtracking      : bool  enable WFC backtracking (slower but more thorough)
-    loc_heuristic     : str   cell-selection strategy (entropy/anti-entropy/
-                              spiral/hilbert/simple/random/lexical)
-    choice_heuristic  : str   pattern-selection strategy (weighted/rarest/
-                              random/lexical)
-    fixed_grid        : list[list[str|None]] or None
-                        Canvas-ordered (row 0 = top) grid of out_h rows × out_w
-                        cols.  A str entry means that cell is pre-collapsed to
-                        that character; None means WFC decides freely.
-
-    Queue message protocol
-    ----------------------
-    ("PROGRESS", collapsed, total_cells, partial_rows)
-    ("PAUSED",   collapsed, total_cells, partial_rows)
-    ("LOG",      message_string)   — informational log line for the UI console
-    ("SUCCESS",  result_rows)
-    ("ERROR",    traceback_string)
     """
     import time
     import traceback as _tb
@@ -118,16 +91,6 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             encoded_weights[encode_patterns[w_id]] = w_val
         choice_random_weighting = np.random.random_sample(wave.shape[1:]) * 0.1
 
-        # ------------------------------------------------------------------ #
-        # fixed_grid overlay helper: when building a snapshot for the UI,    #
-        # overwrite cells that belong to the hardcoded start/goal zones so   #
-        # the progress view always shows the correct boundary tiles.          #
-        # The worker does NOT pre-collapse the wave for these cells — the     #
-        # fixed zones are carved out of the output width before calling WFC  #
-        # (see _launch_wfc_async) so the wave only covers the free middle.   #
-        # fixed_grid rows/cols are already relative to the middle section.   #
-        # ------------------------------------------------------------------ #
-
         # ---- location heuristic ------------------------------------------ #
         loc_map = {
             "entropy":      lambda: wfc_control.makeEntropyLocationHeuristic(choice_random_weighting),
@@ -159,32 +122,56 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         state = {
             "step":                   0,
             "wave_snap":              None,
-            "backtrack_count":        0,   # total across all attempts
-            "attempt_backtrack_count": 0,  # reset each attempt
+            "backtrack_count":        0,
+            "attempt_backtrack_count": 0,
             "attempt":                1,
         }
 
+        def _decode_tile_at(wave_matrix, r, c):
+            """
+            Safely decodes an overlapping pattern at cell (r, c).
+            To resolve messy artifacts at structural boundaries, it looks at 
+            the patterns contributing to (r, c) instead of blindly picking [0,0].
+            """
+            # Search upwards and leftwards for patterns that overlap this cell
+            for dr in range(pattern_width):
+                for dc in range(pattern_width):
+                    pr, pc = r - dr, c - dc
+                    if 0 <= pr < out_h and 0 <= pc < out_w:
+                        # Check if this pattern position has a collapsed state
+                        pat_wave = wave_matrix[:, pr, pc]
+                        if np.sum(pat_wave) == 1:
+                            enc_idx = int(np.argmax(pat_wave))
+                            pat_hash = decode_patterns[enc_idx]
+                            # Instead of checking [0,0], check the relative internal index [dr, dc]
+                            pattern_data = pattern_catalog[pat_hash]
+                            if dr < pattern_data.shape[0] and dc < pattern_data.shape[1]:
+                                tile_hash = pattern_data[dr, dc]
+                                pixel = tile_catalog[tile_hash][0, 0, 0]
+                                return chr(int(pixel))
+            
+            # Fallback behavior if direct neighborhood patterns aren't fully resolved yet
+            collapsed_mask = (np.sum(wave_matrix, axis=0) == 1)
+            if collapsed_mask[r, c]:
+                enc_idx = int(np.argmax(wave_matrix[:, r, c]))
+                pat_hash = decode_patterns[enc_idx]
+                tile_hash = pattern_catalog[pat_hash][0, 0]
+                pixel = tile_catalog[tile_hash][0, 0, 0]
+                return chr(int(pixel))
+            return "?"
+
         def _wave_to_rows(w):
-            collapsed_mask = (np.sum(w, axis=0) == 1)
-            chosen_ids     = np.argmax(w, axis=0)
             rows = []
             for r in range(out_h):
                 line = []
                 for c in range(out_w):
-                    # Fixed cells always show their hardcoded character
                     if (fixed_grid is not None
                             and r < len(fixed_grid)
                             and c < len(fixed_grid[r])
                             and fixed_grid[r][c] is not None):
                         line.append(fixed_grid[r][c])
-                    elif collapsed_mask[r, c]:
-                        enc_idx   = int(chosen_ids[r, c])
-                        pat_hash  = decode_patterns[enc_idx]
-                        tile_hash = pattern_catalog[pat_hash][0, 0]
-                        pixel     = tile_catalog[tile_hash][0, 0, 0]
-                        line.append(chr(int(pixel)))
                     else:
-                        line.append("?")
+                        line.append(_decode_tile_at(w, r, c))
                 rows.append("".join(line))
             return rows
 
@@ -194,7 +181,6 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             bt_n      = state["backtrack_count"]
             bt_attempt = state["attempt_backtrack_count"]
 
-            # Log first 20, then every 100 within this attempt
             if bt_n <= 20 or bt_attempt % 100 == 0:
                 snap = state["wave_snap"]
                 collapsed = 0
@@ -206,10 +192,6 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
                      f"attempt {state['attempt']}/{attempt_limit})  "
                      f"{collapsed}/{total_cells} cells ({pct}%) still collapsed")
 
-            # Per-attempt backtrack cap: if we've been spinning without making
-            # progress, abort this attempt and restart fresh.
-            # Cap = 5× the number of cells (generous for backtracking mode,
-            # but prevents infinite loops from bad heuristic combinations).
             bt_cap = total_cells * 5
             if bt_attempt >= bt_cap:
                 _log(f"[WFC Worker] ⚠ Backtrack cap hit "
@@ -224,11 +206,9 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             state["step"] += 1
             step = state["step"]
 
-            # --- cancel check ---
             if (cancel_event is not None and cancel_event.is_set()):
                 raise wfc_control.StopEarly("Cancelled by user.")
 
-            # --- pause check ---
             if (pause_event is not None and pause_event.is_set()):
                 snap = _wave_to_rows(state["wave_snap"]) \
                     if state["wave_snap"] is not None \
@@ -244,7 +224,6 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
                         raise wfc_control.StopEarly("Cancelled during pause.")
                 _log(f"[WFC Worker] ▶  RESUMED at step {step}")
 
-            # --- progress update ---
             if step % REPORT_EVERY == 0 or step == 1:
                 snap = _wave_to_rows(state["wave_snap"]) \
                     if state["wave_snap"] is not None \
@@ -288,7 +267,7 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
                 )
                 _log(f"[WFC Worker] ── Attempt {attempt} succeeded  "
                      f"({state['step']} steps, "
-                     f"{state['backtrack_count']} total backtracks)")
+                     f"after {state['backtrack_count']} total backtracks)")
                 break
 
             except wfc_control.StopEarly as exc:
@@ -318,21 +297,23 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         # 5.  Decode solution → ASCII rows                                    #
         # ------------------------------------------------------------------ #
         result_strings = []
+        # Convert full single-choice array into a simulated fully resolved wave matrix for the utility helper
+        final_wave = np.zeros((number_of_patterns, out_h, out_w), dtype=np.int32)
+        for r in range(out_h):
+            for c in range(out_w):
+                pat_idx = int(solution[r, c])
+                final_wave[pat_idx, r, c] = 1
+
         for r in range(out_h):
             line = []
             for c in range(out_w):
-                # Fixed cells win unconditionally
                 if (fixed_grid is not None
                         and r < len(fixed_grid)
                         and c < len(fixed_grid[r])
                         and fixed_grid[r][c] is not None):
                     line.append(fixed_grid[r][c])
                 else:
-                    enc_idx   = int(solution[r, c])
-                    pat_hash  = decode_patterns[enc_idx]
-                    tile_hash = pattern_catalog[pat_hash][0, 0]
-                    pixel     = tile_catalog[tile_hash][0, 0, 0]
-                    line.append(chr(int(pixel)))
+                    line.append(_decode_tile_at(final_wave, r, c))
             result_strings.append("".join(line))
 
         _log(f"[WFC Worker] ✓ Done — {len(result_strings)} rows × "
@@ -469,7 +450,7 @@ OBJ_META = {
     "castle_bridge":       ("=", "#885522", CAT_TERRAIN),
     "tree":                ("T", "#228B22", CAT_TERRAIN),
     "slight_slope":        ("/", "#AA8833", CAT_TERRAIN),
-    "steep_slope":         ("/", "#CC9933", CAT_TERRAIN),
+    "steep_slope":         ("\\","#CC9933", CAT_TERRAIN),
     # doors / warps
     "pipe":                ("|", "#00BB00", CAT_DOOR),
     "door":                ("D", "#4466FF", CAT_DOOR),
@@ -482,7 +463,7 @@ OBJ_META = {
     "goomba":              ("g", "#CC6600", CAT_ENEMY),
     "koopa":               ("K", "#44AA00", CAT_ENEMY),
     "piranha_flower":      ("P", "#DD2200", CAT_ENEMY),
-    "hammer_bro":          ("M", "#2244AA", CAT_ENEMY),
+    "hammer_bro":          ("m", "#2244AA", CAT_ENEMY), 
     "thwomp":              ("t", "#6655AA", CAT_ENEMY),
     "bob_omb":             ("o", "#444444", CAT_ENEMY),
     "spiny":               ("s", "#CC2222", CAT_ENEMY),
@@ -491,8 +472,8 @@ OBJ_META = {
     "lakitu_cloud":        ("l", "#CCCCAA", CAT_ENEMY),
     "banzai_bill":         ("Z", "#333333", CAT_ENEMY),
     "bullet_bill_blaster": ("V", "#333333", CAT_ENEMY),
-    "magikoopa":           ("m", "#8844CC", CAT_ENEMY),
-    "spike_top":           ("^", "#AA3322", CAT_ENEMY),
+    "magikoopa":           ("y", "#8844CC", CAT_ENEMY), 
+    "spike_top":           ("<", "#AA3322", CAT_ENEMY), 
     "boo":                 ("u", "#DDDDDD", CAT_ENEMY),
     "bowser":              ("X", "#BB3300", CAT_ENEMY),
     "bowser_jr":           ("x", "#CC5511", CAT_ENEMY),
@@ -500,7 +481,7 @@ OBJ_META = {
     "cheep_cheep":         ("~", "#FF4488", CAT_ENEMY),
     "blooper":             ("q", "#DDDDDD", CAT_ENEMY),
     "wiggler":             ("w", "#AADD00", CAT_ENEMY),
-    "pokey":               ("y", "#CCAA22", CAT_ENEMY),
+    "pokey":               ("Y", "#CCAA22", CAT_ENEMY), 
     "piranha_creeper":     ("e", "#AA2200", CAT_ENEMY),
     "porkupuffer":         ("F", "#8866AA", CAT_ENEMY),
     "fish_bone":           ("%", "#AAAAAA", CAT_ENEMY),
@@ -514,7 +495,7 @@ OBJ_META = {
     "dry_bones":           ("9", "#BBBBAA", CAT_ENEMY),
     "skipsqueak":          ("j", "#FFAA88", CAT_ENEMY),
     "cinobio":             ("+", "#DD4444", CAT_ENEMY),
-    "cinobic":             ("+", "#CC3333", CAT_ENEMY),
+    "cinobic":             ("¡", "#CC3333", CAT_ENEMY),
     "stingby":             (";", "#DDCC00", CAT_ENEMY),
     "angry_sun":           ("A", "#FF8800", CAT_ENEMY),
     "charvaargh":          ("v", "#FF3300", CAT_ENEMY),
@@ -527,72 +508,75 @@ OBJ_META = {
     "roy":                 ("6", "#AA44FF", CAT_ENEMY),
     "ludwig":              ("7", "#4444CC", CAT_ENEMY),
     # items
-    "coin":                ("c", "#FFD700", CAT_ITEM),
+    "coin":                ("¢", "#FFD700", CAT_ITEM), 
     "red_coin":            ("$", "#FF2200", CAT_ITEM),
-    "big_coin":            ("$", "#FFAA00", CAT_ITEM),
-    "one_up":              ("+", "#00CC00", CAT_ITEM),
-    "fire_flower":         ("F", "#FF5500", CAT_ITEM),
-    "super_star":          ("*", "#FFFF00", CAT_ITEM),
-    "super_mushroom":      ("M", "#EE2222", CAT_ITEM),
-    "big_mushroom":        ("M", "#CC1111", CAT_ITEM),
-    "smb2_mushroom":       ("M", "#884488", CAT_ITEM),
-    "super_hammer":        ("#", "#996622", CAT_ITEM),
-    "p_switch":            ("p", "#4488FF", CAT_ITEM),
-    "pow":                 ("P", "#3366FF", CAT_ITEM),
-    "spring":              ("/", "#DDDD00", CAT_ITEM),
-    "shoe_goomba":         ("g", "#CC6600", CAT_ITEM),
+    "big_coin":            ("£", "#FFAA00", CAT_ITEM), 
+    "one_up":              ("U", "#00CC00", CAT_ITEM), 
+    "fire_flower":         ("i", "#FF5500", CAT_ITEM), 
+    "super_star":          ("¤", "#FFFF00", CAT_ITEM), 
+    "super_mushroom":      ("M", "#EE2222", CAT_ITEM), 
+    "big_mushroom":        ("¶", "#CC1111", CAT_ITEM), 
+    "smb2_mushroom":       ("§", "#884488", CAT_ITEM), 
+    "super_hammer":        ("¬", "#996622", CAT_ITEM), 
+    "p_switch":            ("¦", "#4488FF", CAT_ITEM), 
+    "pow":                 ("¯", "#3366FF", CAT_ITEM), 
+    "spring":              ("±", "#DDDD00", CAT_ITEM), 
+    "shoe_goomba":         ("µ", "#CC6600", CAT_ITEM), 
     "cannon_box":          ("]", "#666666", CAT_ITEM),
-    "propeller_box":       ("]", "#8888FF", CAT_ITEM),
-    "goomba_mask":         ("]", "#CC6600", CAT_ITEM),
-    "bullet_bill_mask":    ("]", "#333333", CAT_ITEM),
-    "red_pow_box":         ("]", "#FF3333", CAT_ITEM),
+    "propeller_box":       ("}", "#8888FF", CAT_ITEM), 
+    "goomba_mask":         (")", "#CC6600", CAT_ITEM), 
+    "bullet_bill_mask":    ("°", "#333333", CAT_ITEM),
+    "red_pow_box":         ("²", "#FF3333", CAT_ITEM),
     # platforms
     "lift":                ("-", "#DDAA55", CAT_PLATFORM),
-    "mushroom_platform":   ("-", "#FF6688", CAT_PLATFORM),
-    "semisolid_platform":  ("=", "#AAAAFF", CAT_PLATFORM),
-    "bridge":              ("=", "#AA8833", CAT_PLATFORM),
-    "lava_lift":           ("-", "#FF4400", CAT_PLATFORM),
-    "snake_block":         ("-", "#44CC44", CAT_PLATFORM),
-    "track_block":         ("-", "#AA6622", CAT_PLATFORM),
-    "conveyor_belt":       ("_", "#888888", CAT_PLATFORM),
-    "fast_conveyor_belt":  ("_", "#555555", CAT_PLATFORM),
-    "sprint_platform":     ("-", "#FF8800", CAT_PLATFORM),
-    "seesaw":              ("/", "#AA8844", CAT_PLATFORM),
-    "swinging_claw":       ("U", "#AAAAAA", CAT_PLATFORM),
-    "on_off_trampoline":   ("v", "#FF6600", CAT_PLATFORM),
-    "mushroom_trampoline": ("v", "#FF4488", CAT_PLATFORM),
+    "mushroom_platform":   ("³", "#FF6688", CAT_PLATFORM), 
+    "semisolid_platform":  ("´", "#AAAAFF", CAT_PLATFORM),
+    "bridge":              ("·", "#AA8833", CAT_PLATFORM), 
+    "lava_lift":           ("¸", "#FF4400", CAT_PLATFORM), 
+    "snake_block":         ("¹", "#44CC44", CAT_PLATFORM), 
+    "track_block":         ("º", "#AA6622", CAT_PLATFORM), 
+    "conveyor_belt":       ("»", "#888888", CAT_PLATFORM),
+    "fast_conveyor_belt":  ("¼", "#555555", CAT_PLATFORM), 
+    "sprint_platform":     ("½", "#FF8800", CAT_PLATFORM), 
+    "seesaw":              ("¾", "#AA8844", CAT_PLATFORM),
+    "swinging_claw":       ("¿", "#AAAAAA", CAT_PLATFORM), 
+    "on_off_trampoline":   ("À", "#FF6600", CAT_PLATFORM), 
+    "mushroom_trampoline": ("Á", "#FF4488", CAT_PLATFORM), 
     "jumping_machine":     ("J", "#8844FF", CAT_PLATFORM),
-    "half_collision_platform": ("-", "#CCCCAA", CAT_PLATFORM),
-    "donut":               ("d", "#F09050", CAT_PLATFORM),
+    "half_collision_platform": ("Â", "#CCCCAA", CAT_PLATFORM), 
+    "donut":               ("Ã", "#F09050", CAT_PLATFORM), 
     # hazards
-    "fire_bar":            ("|", "#FF4400", CAT_HAZARD),
-    "saw":                 ("O", "#AAAAAA", CAT_HAZARD),
-    "burner":              ("B", "#FF6600", CAT_HAZARD),
-    "spikes":              ("^", "#888888", CAT_HAZARD),
-    "spike_ball":          ("o", "#884444", CAT_HAZARD),
-    "skewer":              ("|", "#666666", CAT_HAZARD),
-    "twister":             ("@", "#AADDFF", CAT_HAZARD),
-    "icicle":              ("i", "#AADDFF", CAT_HAZARD),
+    "fire_bar":            ("Ä", "#FF4400", CAT_HAZARD), 
+    "saw":                 ("Å", "#AAAAAA", CAT_HAZARD), 
+    "burner":              ("Æ", "#FF6600", CAT_HAZARD), 
+    "spikes":              ("Ç", "#888888", CAT_HAZARD), 
+    "spike_ball":          ("È", "#884444", CAT_HAZARD), 
+    "skewer":              ("É", "#666666", CAT_HAZARD), 
+    "twister":             ("Ê", "#AADDFF", CAT_HAZARD), 
+    "icicle":              ("Ë", "#AADDFF", CAT_HAZARD), 
     # deco
-    "cloud":               ("Q", "#CCCCFF", CAT_DECO),
-    "vine":                ("|", "#00BB00", CAT_DECO),
-    "water_marker":        ("~", "#0055FF", CAT_DECO),
-    "arrow":               (">", "#FFFF00", CAT_DECO),
-    "one_way":             ("^", "#FFFF88", CAT_DECO),
-    "reel_camera":         ("R", "#AAAAAA", CAT_DECO),
-    "sound_effect":        ("s", "#FFAAFF", CAT_DECO),
+    "cloud":               ("Ì", "#CCCCFF", CAT_DECO), 
+    "vine":                ("Í", "#00BB00", CAT_DECO), 
+    "water_marker":        ("Î", "#0055FF", CAT_DECO), 
+    "arrow":               ("Ï", "#FFFF00", CAT_DECO), 
+    "one_way":             ("Ð", "#FFFF88", CAT_DECO), 
+    "reel_camera":         ("Ñ", "#AAAAAA", CAT_DECO), 
+    "sound_effect":        ("Ò", "#FFAAFF", CAT_DECO), 
     # other
-    "player":              ("@", "#0000FF", CAT_OTHER),
-    "clown_car":           ("C", "#FF4488", CAT_OTHER),
-    "koopa_car":           ("C", "#44AA00", CAT_OTHER),
-    "track":               ("-", "#AAAAAA", CAT_OTHER),
-    "starting_arrow":      (">", "#FFFF00", CAT_OTHER),
-    "cannon":              ("o", "#444444", CAT_OTHER),
-    "exclamation_block":   ("!", "#FFAA00", CAT_OTHER),
+    "player":              ("Ó", "#0000FF", CAT_OTHER), 
+    "clown_car":           ("Ô", "#FF4488", CAT_OTHER), 
+    "koopa_car":           ("Õ", "#44AA00", CAT_OTHER), 
+    "track":               ("Ö", "#AAAAAA", CAT_OTHER), 
+    "starting_arrow":      ("×", "#FFFF00", CAT_OTHER),
+    "cannon":              ("Ø", "#444444", CAT_OTHER), 
+    "exclamation_block":   ("Ù", "#FFAA00", CAT_OTHER), 
     "_ground_tile":        ("#", "#8B6914", CAT_TERRAIN),
     "_unknown":            ("?", "#FF00FF", CAT_OTHER),
 }
- 
+
+ASCII_MAP = {k: v[0] for k, v in OBJ_META.items() if k != "_unknown"}
+ASCII_MAP["_unknown"] = "?"
+
 GROUND_COLOR = "#8B6914"
 GROUND_CHAR  = "#"
  
@@ -602,43 +586,43 @@ GROUND_CHAR  = "#"
 ASCII_MAP = {
     "ground":"#","_ground_tile":"#","block":"B","hard_block":"H",
     "question_block":"?","hidden_block":"h","note_block":"N",
-    "donut_block":"D","ice_block":"I","p_block":"P","on_off_block":"O",
+    "donut_block":"d","ice_block":"I","p_block":"p","on_off_block":"O",
     "dotted_line_block":".","blinking_block":"*","spike_block":"^",
-    "crate":"C","stone":"S","goal_ground":"#","starting_brick":"#",
+    "crate":"C","stone":"S","goal_ground":"_","starting_brick":"{",
     "castle_bridge":"=","tree":"T","slight_slope":"/","steep_slope":"\\",
-    "pipe":"|","door":"d","warp_box":"W","key":"k",
-    "checkpoint_flag":"f","goal":"F","clear_pipe":"c",
-    "goomba":"g","koopa":"K","piranha_flower":"P","hammer_bro":"H",
-    "thwomp":"T","bob_omb":"o","spiny":"s","buzzy_beetle":"b",
+    "pipe":"|","door":"D","warp_box":"W","key":"k",
+    "checkpoint_flag":"f","goal":"G","clear_pipe":"c",
+    "goomba":"g","koopa":"K","piranha_flower":"P","hammer_bro":"m",
+    "thwomp":"t","bob_omb":"o","spiny":"s","buzzy_beetle":"b",
     "lakitu":"L","lakitu_cloud":"l","banzai_bill":"Z",
-    "bullet_bill_blaster":"V","magikoopa":"m","spike_top":"^",
+    "bullet_bill_blaster":"V","magikoopa":"y","spike_top":"<",
     "boo":"u","bowser":"X","bowser_jr":"x","chain_chomp":"@",
-    "cheep_cheep":"~","blooper":"q","wiggler":"w","pokey":"y",
-    "piranha_creeper":"e","porkupuffer":"r","fish_bone":"%",
-    "lava_bubble":"&","rocky_wrench":"R","muncher":",",
-    "ant_trooper":"a","monty_mole":"n","mechakoopa":"M",
+    "cheep_cheep":"~","blooper":"q","wiggler":"w","pokey":"Y",
+    "piranha_creeper":"e","porkupuffer":"F","fish_bone":"%",
+    "lava_bubble":"&","rocky_wrench":"r","muncher":",",
+    "ant_trooper":"a","monty_mole":"n","mechakoopa":"R",
     "boom_boom":"!","dry_bones":"9","skipsqueak":"j",
-    "cinobio":"+","cinobic":"+","stingby":";","angry_sun":"A",
+    "cinobio":"+","cinobic":"¡","stingby":";","angry_sun":"A",
     "charvaargh":"v","bully":"[","lemmy":"1","morton":"2",
     "larry":"3","wendy":"4","iggy":"5","roy":"6","ludwig":"7",
-    "coin":"c","red_coin":"$","big_coin":"$","one_up":"+",
-    "fire_flower":"f","super_star":"*","super_mushroom":"p",
-    "big_mushroom":"p","smb2_mushroom":"p","super_hammer":"t",
-    "p_switch":"z","pow":"i","spring":"J","shoe_goomba":"G",
-    "cannon_box":"]","propeller_box":"]","goomba_mask":"]",
-    "bullet_bill_mask":"]","red_pow_box":"]",
-    "lift":"-","mushroom_platform":"-","semisolid_platform":"=",
-    "bridge":"=","lava_lift":"-","snake_block":"~","track_block":":",
-    "conveyor_belt":"_","fast_conveyor_belt":"_","sprint_platform":"-",
-    "seesaw":"/","swinging_claw":"U","on_off_trampoline":"E",
-    "mushroom_trampoline":"E","jumping_machine":"Q",
-    "half_collision_platform":"-","donut":"d",
-    "fire_bar":"|","saw":"O","burner":"B","spikes":"^",
-    "spike_ball":"o","skewer":"|","twister":"@","icicle":"i",
-    "cloud":"(","vine":"`","water_marker":"~","arrow":">",
-    "one_way":"^","reel_camera":"R","sound_effect":".",
-    "player":"@","clown_car":"C","koopa_car":"C","track":":",
-    "starting_arrow":">","cannon":"o","exclamation_block":"!",
+    "coin":"¢","red_coin":"$","big_coin":"£","one_up":"U",
+    "fire_flower":"i","super_star":"¤","super_mushroom":"M",
+    "big_mushroom":"¶","smb2_mushroom":"§","super_hammer":"¬",
+    "p_switch":"¦","pow":"¯","spring":"±","shoe_goomba":"µ",
+    "cannon_box":"]","propeller_box":"}","goomba_mask":")",
+    "bullet_bill_mask":"°","red_pow_box":"²",
+    "lift":"-","mushroom_platform":"³","semisolid_platform":"´",
+    "bridge":"·","lava_lift":"¸","snake_block":"¹","track_block":"º",
+    "conveyor_belt":"»","fast_conveyor_belt":"¼","sprint_platform":"½",
+    "seesaw":"¾","swinging_claw":"¿","on_off_trampoline":"À",
+    "mushroom_trampoline":"Á","jumping_machine":"J",
+    "half_collision_platform":"Â","donut":"Ã",
+    "fire_bar":"Ä","saw":"Å","burner":"Æ","spikes":"Ç",
+    "spike_ball":"È","skewer":"É","twister":"Ê","icicle":"Ë",
+    "cloud":"Ì","vine":"Í","water_marker":"Î","arrow":"Ï",
+    "one_way":"Ð","reel_camera":"Ñ","sound_effect":"Ò",
+    "player":"Ó","clown_car":"Ô","koopa_car":"Õ","track":"Ö",
+    "starting_arrow":"×","cannon":"Ø","exclamation_block":"Ù",
     "_unknown":"?",
 }
  
@@ -869,35 +853,26 @@ class MM2Viewer(tk.Tk):
             messagebox.showerror("Load error", str(e))
 
     def _load_ascii(self):
-        """Load a plain-text ASCII level file (.txt) exported by Export ASCII.
-
-        The file is a grid of characters, one row per line, where:
-          '#'        = ground tile
-          '.'  '-'   = empty air
-          anything else = object (looked up via ASCII_MAP)
-
-        The loaded level is converted to the same ground+objects dict format
-        used everywhere else, so all viewer features (zoom, categories, PNG
-        export, WFC training) work on it without any special-casing.
-
-        Multiple files can be selected; each becomes a separate level entry
-        so you can page through them with Prev/Next.
-        """
-        paths = filedialog.askopenfilenames(
-            title="Select ASCII level file(s)",
-            filetypes=[("Text files", "*.txt"), ("All", "*.*")])
+        paths = filedialog.askopenfilenames(filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
         if not paths:
             return
-
+            
         loaded = []
         errors = []
+
+        # Build reverse lookup character table dynamically from our unique mapping dictionary
+        REVERSE_ASCII_MAP = {}
+        for asset_name, meta in OBJ_META.items():
+            char_symbol = meta[0]
+            if asset_name not in ["_unknown", "_ground_tile"]:
+                REVERSE_ASCII_MAP[char_symbol] = asset_name
+
         for path in paths:
             try:
                 with open(path, "r", encoding="utf-8", errors="replace") as f:
                     raw_lines = f.read().splitlines()
 
-                # Strip blank lines at top/bottom; keep interior blank lines
-                # as empty rows (they represent sky).
+                # Trim empty outer line bounds while maintaining internal sky gaps
                 while raw_lines and not raw_lines[0].strip():
                     raw_lines.pop(0)
                 while raw_lines and not raw_lines[-1].strip():
@@ -907,27 +882,21 @@ class MM2Viewer(tk.Tk):
                     errors.append(f"{os.path.basename(path)}: file is empty")
                     continue
 
-                # Normalise row width — pad short rows with '.' so the grid
-                # is rectangular before we hand it off to the decode path.
+                # Normalise row boundaries using your original dotted block rule
                 max_w = max(len(r) for r in raw_lines)
                 rows  = [r.ljust(max_w, ".") for r in raw_lines]
 
                 name = os.path.splitext(os.path.basename(path))[0]
                 print(f"[Load ASCII] '{name}'  {max_w}w × {len(rows)}h")
 
-                # ---- parse layout markers out of the grid ---- #
-                # The exported ASCII grid bakes in S (spawn), G/X (goal)
-                # as literal characters.  Scan for them to recover the
-                # metadata that _redraw needs, then treat them as air so
-                # they don't become spurious object entries.
-
                 grid_h = len(rows)
                 spawn_col_found = None
-                spawn_row_found = None   # canvas row (0=top)
+                spawn_row_found = None
                 goal_col_found  = None
                 goal_row_found  = None
                 is_castle        = False
 
+                # RESTORED CRITICAL LOGIC: Locate level markers from text representation
                 for ri, row_str in enumerate(rows):
                     for ci, ch in enumerate(row_str):
                         if ch == "S":
@@ -938,25 +907,18 @@ class MM2Viewer(tk.Tk):
                             goal_row_found = ri
                             is_castle = (ch == "X")
 
-                # Convert canvas rows → game-Y  (game_y = grid_h - 1 - canvas_row)
+                # Map text indices back to the vertical coordinate system
                 if spawn_row_found is not None:
                     start_y = (grid_h - 1) - spawn_row_found
                 else:
-                    start_y = 1   # SMM2 default
+                    start_y = 1
 
                 if goal_row_found is not None:
-                    goal_y_game = (grid_h - 1) - goal_row_found
-                    # goal_y_raw in the level dict is the raw game-Y value
-                    goal_y_raw = goal_y_game
+                    goal_y_raw = (grid_h - 1) - goal_row_found
                 else:
                     goal_y_raw = 0
 
                 if goal_col_found is not None:
-                    # _redraw computes: goal_base_col = goal_x_raw // 10
-                    # and then:         max_tx = goal_base_col + 10
-                    # So we need goal_x_raw = goal_col_found * 10  (exact)
-                    # AND boundary_right must equal (goal_col_found + 10) * 16
-                    # so that max_tx from boundary_right also equals goal_base_col+10.
                     goal_x_raw = goal_col_found * 10
                     boundary_right = (goal_col_found + 10) * 16
                 else:
@@ -966,7 +928,7 @@ class MM2Viewer(tk.Tk):
                 print(f"[Load ASCII]   spawn col={spawn_col_found} canvas_row={spawn_row_found} → start_y={start_y}")
                 print(f"[Load ASCII]   goal  col={goal_col_found}  canvas_row={goal_row_found}  → goal_y_raw={goal_y_raw}  goal_x_raw={goal_x_raw}  castle={is_castle}")
 
-                # Build a minimal level dict with the recovered metadata
+                # Construct baseline structure payload definitions matching level_to_dict format
                 base = {
                     "name":             name,
                     "gamestyle":        "smb1",
@@ -982,21 +944,49 @@ class MM2Viewer(tk.Tk):
                     "_wfc_min_y":       0,
                 }
 
-                # skip_spawn_passes=True: the exported file already has the
-                # correct start/goal zones baked in — don't clobber them.
-                level = self._decode_wfc_result(rows, base, skip_spawn_passes=True)
-                level["name"] = name   # restore filename after decode overwrites it
-                loaded.append(level)
-                print(f"[Load ASCII] Decoded: {len(level['ground'])} ground, "
-                      f"{len(level['objects'])} objects")
+                # Dynamically compile structural elements into objects and ground lists 
+                for r_idx, line in enumerate(rows):
+                    tile_y = (grid_h - 1) - r_idx
+                    for c_idx, char in enumerate(line):
+                        # Treat special placement anchors as structural air now that metadata is extracted
+                        if char in ("S", "G", "X", " "):
+                            continue
+                        
+                        asset_name = REVERSE_ASCII_MAP.get(char, None)
+                        if not asset_name:
+                            continue
+                        
+                        if asset_name == "ground":
+                            base["ground"].append({
+                                "x": c_idx, 
+                                "y": tile_y, 
+                                "tile_id": 7, 
+                                "background_id": 0
+                            })
+                        else:
+                            pixel_x = c_idx * self.TILE_PX
+                            pixel_y = tile_y * self.TILE_PX
+                            
+                            matched_id = 0
+                            for op_id, op_str in OBJID_INT_TO_STR.items():
+                                if op_str == asset_name:
+                                    matched_id = op_id
+                                    break
+                            base["objects"].append({
+                                "x": pixel_x, 
+                                "y": pixel_y, 
+                                "id": str(matched_id)
+                            })
+
+                base["name"] = name
+                loaded.append(base)
+                print(f"[Load ASCII] Decoded: {len(base['ground'])} ground, {len(base['objects'])} objects")
 
             except Exception as exc:
                 errors.append(f"{os.path.basename(path)}: {exc}")
 
         if errors:
-            messagebox.showwarning(
-                "Load ASCII — some files failed",
-                "\n".join(errors))
+            messagebox.showwarning("Load ASCII — some files failed", "\n".join(errors))
 
         if loaded:
             self.levels = loaded
@@ -1976,22 +1966,81 @@ class MM2Viewer(tk.Tk):
  
     def _export_ascii(self):
         if not self.levels:
-            messagebox.showwarning("No level", "Load a level first.")
             return
-        lvl  = self.levels[self.current_idx]
-        name = lvl.get("name", f"level_{self.current_idx+1}")
-        grid, _, _ = self._build_ascii_grid()
+        lvl = self.levels[self.current_idx]
+        
+        default_filename = f"{lvl.get('name', 'level')}.txt"
+        
         path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Text files","*.txt"),("All","*.*")],
-            title="Export ASCII level",
-            initialfile=f"{name}.txt")
+            initialfile=default_filename,
+            defaultextension=".txt", 
+            filetypes=[("Text files", "*.txt")]
+        )
         if not path:
             return
-        with open(path, "w") as f:
-            for row in grid:
-                f.write("".join(row) + "\n")
-        messagebox.showinfo("Exported", f"Saved to {path}")
+            
+        try:
+            # Create a character matrix initialized to default background air spaces
+            grid_matrix = [[" " for _ in range(self.MAX_COLS)] for _ in range(self.MAX_ROWS)]
+            
+            # 1. Overlay ground elements
+            for g in lvl.get("ground", []):
+                col = g["x"]
+                tile_y = g["y"]
+                row = (self.MAX_ROWS - 1) - tile_y
+                if 0 <= col < self.MAX_COLS and 0 <= row < self.MAX_ROWS:
+                    grid_matrix[row][col] = "ground"
+
+            # 2. Overlay object entries
+            for o in lvl.get("objects", []):
+                col = int(o["x"] // self.TILE_PX)
+                tile_y = int(o["y"] // self.TILE_PX)
+                row = (self.MAX_ROWS - 1) - tile_y
+                if 0 <= col < self.MAX_COLS and 0 <= row < self.MAX_ROWS:
+                    grid_matrix[row][col] = obj_id_to_str(o["id"])
+            
+            # 3. Inject special structure overlay markers back into the grid layout
+            # Parse start_y marker position
+            start_y = lvl.get("start_y", 1)
+            spawn_row = (self.MAX_ROWS - 1) - start_y
+            if 0 <= spawn_row < self.MAX_ROWS:
+                grid_matrix[spawn_row][0] = "SPAWN_MARKER"
+
+            # Parse goal endpoints position metrics
+            goal_x_raw = lvl.get("goal_x_raw", 0)
+            goal_y_raw = lvl.get("goal_y_raw", 0)
+            goal_col = goal_x_raw // 10
+            goal_row = (self.MAX_ROWS - 1) - goal_y_raw
+            is_castle = (lvl.get("theme", "overworld") == "castle")
+
+            if 0 <= goal_col < self.MAX_COLS and 0 <= goal_row < self.MAX_ROWS:
+                grid_matrix[goal_row][goal_col] = "CASTLE_MARKER" if is_castle else "GOAL_MARKER"
+
+            # 4. Generate final file layout lines
+            rows = []
+            for r in range(self.MAX_ROWS):
+                row_chars = []
+                for c in range(self.MAX_COLS):
+                    cell = grid_matrix[r][c]
+                    if cell == "SPAWN_MARKER":
+                        char = "S"
+                    elif cell == "GOAL_MARKER":
+                        char = "G"
+                    elif cell == "CASTLE_MARKER":
+                        char = "X"
+                    elif cell == " " or cell == "ground":
+                        char = ASCII_MAP.get(cell, " ")
+                    else:
+                        char = ASCII_MAP.get(cell, "?")
+                    row_chars.append(char)
+                rows.append("".join(row_chars))
+            
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(rows))
+                
+            messagebox.showinfo("Success", "ASCII file exported cleanly.")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to save layout: {str(e)}")
 
     def _capture_png(self):
         """Render the entire level to a PNG file using PIL.
