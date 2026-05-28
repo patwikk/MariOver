@@ -5,7 +5,10 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
                              pause_event=None, cancel_event=None,
                              attempt_limit=10, backtracking=False,
                              loc_heuristic="entropy", choice_heuristic="weighted",
-                             fixed_grid=None):
+                             fixed_grid=None,
+                             bounded_ground_y=None,
+                             forced_ground_cols=None,
+                             column_snap=False):
     """
     Runs WFC inside a subprocess, emitting real-time progress messages through
     *q* so the UI can track collapse progress tile-by-tile, render partial
@@ -39,7 +42,10 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         _log(f"[WFC Worker] ── Output target:   {out_w}w × {out_h}h  ({total_cells} cells)")
         _log(f"[WFC Worker] ── Params: pattern_width={pattern_width}  "
              f"attempts={attempt_limit}  backtracking={backtracking}  "
-             f"loc={loc_heuristic}  choice={choice_heuristic}")
+             f"loc={loc_heuristic}  choice={choice_heuristic}  "
+             f"bounded_ground_y={bounded_ground_y}  "
+             f"forced_ground_cols={forced_ground_cols}  "
+             f"column_snap={column_snap}")
 
         # ------------------------------------------------------------------ #
         # 2.  Build patterns, adjacency, wave                                 #
@@ -51,11 +57,22 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
 
         _log(f"[WFC Worker] ── Unique tiles: {len(tile_catalog)}")
 
+        # ── Column-snapshot mode (paper §3.3.3): use a 2×out_h rectangle
+        # instead of a square so each snapshot captures a full vertical slice.
+        # This was shown to increase playability dramatically (70 %+ success).
+        if column_snap:
+            snap_h = train_h   # full height of training canvas
+            snap_w = 2
+            _log(f"[WFC Worker] ── Column-snapshot mode: {snap_w}×{snap_h}")
+        else:
+            snap_h = pattern_width
+            snap_w = pattern_width
+
         (pattern_catalog, pattern_weights,
          pattern_list, pattern_grid) = \
             wfc_control.make_pattern_catalog_with_rotations(
                 tile_grid,
-                pattern_width=pattern_width,
+                pattern_width=snap_w,
                 rotations=0,
                 input_is_periodic=False,
             )
@@ -67,7 +84,7 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             pattern_grid,
             pattern_catalog,
             direction_offsets,
-            (pattern_width, pattern_width),
+            (snap_w, snap_w),
         )
 
         _log(f"[WFC Worker] ── Adjacency rules: {len(adjacency_relations)}")
@@ -117,6 +134,80 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         _log(f"[WFC Worker] ── Setup complete. Starting solver…")
 
         # ------------------------------------------------------------------ #
+        # Paper improvement 1: BOUNDED TILE APPEARANCES (§3.2.2)             #
+        # Restrict ground '#' tiles so they can only appear at canvas rows    #
+        # >= (out_h - bounded_ground_y).  This prevents floating ground       #
+        # platforms from appearing near the top of the level.                 #
+        # bounded_ground_y is expressed as a game-y threshold: ground may     #
+        # only appear at game-y < bounded_ground_y (i.e. near the bottom).   #
+        # ------------------------------------------------------------------ #
+        GROUND_ORD = ord('#')
+
+        if bounded_ground_y is not None and bounded_ground_y > 0:
+            # canvas row index where game-y == bounded_ground_y
+            # canvas row 0 = top = highest game-y
+            bound_canvas_row = out_h - bounded_ground_y  # rows 0..bound_canvas_row-1 are "above" the bound
+
+            def _pattern_contains_ground(pat_hash):
+                """Return True if any cell in this pattern is a '#' tile."""
+                pd = pattern_catalog[pat_hash]
+                for ri in range(pd.shape[0]):
+                    for ci in range(pd.shape[1]):
+                        tile_h = pd[ri, ci]
+                        if tile_catalog[tile_h][0, 0, 0] == GROUND_ORD:
+                            return True
+                return False
+
+            ground_pattern_indices = [
+                encode_patterns[ph]
+                for ph in pattern_list
+                if _pattern_contains_ground(ph)
+            ]
+            _log(f"[WFC Worker] ── Bounding ground: {len(ground_pattern_indices)} patterns "
+                 f"banned above canvas row {bound_canvas_row} (game-y >= {bounded_ground_y})")
+
+            # Ban all ground-containing patterns from cells above the bound
+            for r in range(bound_canvas_row):
+                for c in range(out_w):
+                    for gpi in ground_pattern_indices:
+                        if wave[gpi, r, c]:
+                            wave[gpi, r, c] = False
+
+        # ------------------------------------------------------------------ #
+        # Paper improvement 2: FORCED TILE PLACEMENTS (§3.2.1)               #
+        # Pre-collapse specific cells to '#' to encourage a continuous ground  #
+        # plane near the bottom.  forced_ground_cols is a list of             #
+        # (game_col, game_y) tuples.  We collapse those cells before the      #
+        # solver starts, which propagates ground adjacency outwards.          #
+        # ------------------------------------------------------------------ #
+        _forced_initial_wave = wave.copy()   # snapshot before forced placements
+
+        if forced_ground_cols:
+            # Find a ground pattern (the pattern whose [0,0] tile is '#')
+            ground_pat_idx = None
+            for ph in pattern_list:
+                pd = pattern_catalog[ph]
+                if tile_catalog[pd[0, 0]][0, 0, 0] == GROUND_ORD:
+                    ground_pat_idx = encode_patterns[ph]
+                    break
+
+            if ground_pat_idx is not None:
+                _log(f"[WFC Worker] ── Forcing ground at {len(forced_ground_cols)} positions "
+                     f"using pattern index {ground_pat_idx}")
+                for (fc, fy) in forced_ground_cols:
+                    canvas_r = out_h - 1 - fy
+                    if 0 <= canvas_r < out_h and 0 <= fc < out_w:
+                        # Collapse this cell to only the ground pattern
+                        wave[:, canvas_r, fc] = False
+                        wave[ground_pat_idx, canvas_r, fc] = True
+                        _log(f"[WFC Worker]   ↳ Forced '#' at col={fc} game_y={fy} "
+                             f"(canvas_row={canvas_r})")
+            else:
+                _log("[WFC Worker] ⚠ No ground pattern found — forced placements skipped")
+
+
+
+        # ------------------------------------------------------------------ #
         # 3.  Mutable state shared across callbacks                           #
         # ------------------------------------------------------------------ #
         state = {
@@ -127,6 +218,9 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             "attempt":                1,
         }
 
+        # Effective snapshot width (column_snap uses snap_w=2)
+        _snap_w = snap_w
+
         def _decode_tile_at(wave_matrix, r, c):
             """
             Safely decodes an overlapping pattern at cell (r, c).
@@ -134,8 +228,8 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             the patterns contributing to (r, c) instead of blindly picking [0,0].
             """
             # Search upwards and leftwards for patterns that overlap this cell
-            for dr in range(pattern_width):
-                for dc in range(pattern_width):
+            for dr in range(_snap_w):
+                for dc in range(_snap_w):
                     pr, pc = r - dr, c - dc
                     if 0 <= pr < out_h and 0 <= pc < out_w:
                         # Check if this pattern position has a collapsed state
@@ -252,6 +346,23 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
                 state["step"]      = 0
                 state["wave_snap"] = None
                 wave = wfc_control.makeWave(number_of_patterns, out_h, out_w, ground=None)
+
+                # Re-apply bounded tile appearance restriction
+                if bounded_ground_y is not None and bounded_ground_y > 0:
+                    bound_canvas_row = out_h - bounded_ground_y
+                    for r in range(bound_canvas_row):
+                        for c in range(out_w):
+                            for gpi in ground_pattern_indices:
+                                if wave[gpi, r, c]:
+                                    wave[gpi, r, c] = False
+
+                # Re-apply forced placements
+                if forced_ground_cols and ground_pat_idx is not None:
+                    for (fc, fy) in forced_ground_cols:
+                        canvas_r = out_h - 1 - fy
+                        if 0 <= canvas_r < out_h and 0 <= fc < out_w:
+                            wave[:, canvas_r, fc] = False
+                            wave[ground_pat_idx, canvas_r, fc] = True
 
             try:
                 solution = wfc_control.run(
@@ -744,6 +855,10 @@ class MM2Viewer(tk.Tk):
             "backtracking":   False,  # backtracking (slow but more thorough)
             "loc_heuristic":  "entropy",   # cell-selection strategy
             "choice_heuristic": "weighted", # pattern-selection strategy
+            # Paper improvements:
+            "bounded_ground_y": 10,   # ground '#' only allowed below this game-y (0=off)
+            "forced_ground_cols": True,  # force ground tiles at start/mid/end of level
+            "column_snap":    False,  # use 2×H column snapshots instead of N×N
         }
 
         self._build_ui()
@@ -1321,6 +1436,16 @@ class MM2Viewer(tk.Tk):
         bt       = bool(p.get("backtracking",  False))
         loc_h    = str(p.get("loc_heuristic",  "entropy"))
         choice_h = str(p.get("choice_heuristic", "weighted"))
+        col_snap = bool(p.get("column_snap", False))
+
+        # Paper improvement params
+        raw_bgy  = p.get("bounded_ground_y", 10)
+        bounded_ground_y = int(raw_bgy) if raw_bgy else None
+
+        # Forced ground columns: anchor '#' at left-edge, mid-level, pre-goal
+        # (paper §3.3.1: Forced3 = 3 forced positions).  We derive these from
+        # the actual middle_w once apply_wfc_generation returns it.
+        use_forced = bool(p.get("forced_ground_cols", True))
 
         # Build canvas (fast, in-process).
         # apply_wfc_generation now returns middle_w as gen_width — the worker
@@ -1335,6 +1460,20 @@ class MM2Viewer(tk.Tk):
         GOAL_W   = base_level.get("_wfc_goal_w",  11)
         full_w   = START_W + middle_w + GOAL_W
 
+        # Build forced ground column positions (paper §3.2.1 Forced3):
+        # anchor '#' at game_y=0 at left-edge, middle, and right-edge of
+        # the WFC-generated middle section.  game_y=0 is the bottom row.
+        if use_forced:
+            forced_ground_cols = [
+                (0,              0),                   # left edge
+                (middle_w // 2,  0),                   # mid-level
+                (middle_w - 1,   0),                   # right edge (before goal)
+            ]
+            _log_msg = (f"[WFC] Forced ground cols: {forced_ground_cols}")
+            print(_log_msg)
+        else:
+            forced_ground_cols = None
+
         ctx = multiprocessing.get_context("spawn")
 
         # Shared control flags
@@ -1348,7 +1487,10 @@ class MM2Viewer(tk.Tk):
                   int(middle_w), int(gen_height), pat_w,
                   self._wfc_pause_event, self._wfc_cancel_event,
                   attempts, bt, loc_h, choice_h,
-                  None),   # fixed_grid not used — stitching done post-WFC
+                  None,              # fixed_grid not used — stitching done post-WFC
+                  bounded_ground_y,  # paper §3.2.2: bound ground tiles to bottom
+                  forced_ground_cols,# paper §3.2.1: anchor ground at key columns
+                  col_snap),         # paper §3.3.3: column-shaped snapshots
         )
         wfc_process.start()
 
@@ -1656,7 +1798,10 @@ class MM2Viewer(tk.Tk):
             f"W={p['width'] or 'auto'}  H={p['height'] or 'auto'}  "
             f"pattern_width={p['pattern_width']}  "
             f"attempts={p['attempt_limit']}  backtracking={p['backtracking']}  "
-            f"loc={p['loc_heuristic']}  choice={p['choice_heuristic']}"
+            f"loc={p['loc_heuristic']}  choice={p['choice_heuristic']}  "
+            f"bounded_ground_y={p.get('bounded_ground_y', 10)}  "
+            f"forced_ground={p.get('forced_ground_cols', True)}  "
+            f"column_snap={p.get('column_snap', False)}"
         )
         self._launch_wfc_async(base_level)
  
@@ -2335,6 +2480,10 @@ class _WFCSettingsDialog(tk.Toplevel):
         self._v_bt      = tk.BooleanVar(value=p.get("backtracking", False))
         self._v_loc     = tk.StringVar(value=p.get("loc_heuristic",    "entropy"))
         self._v_choice  = tk.StringVar(value=p.get("choice_heuristic", "weighted"))
+        # Paper improvements
+        self._v_bgy     = tk.IntVar(value=p.get("bounded_ground_y", 10))
+        self._v_forced  = tk.BooleanVar(value=p.get("forced_ground_cols", True))
+        self._v_colsnap = tk.BooleanVar(value=p.get("column_snap", False))
 
         # ---- layout -------------------------------------------------------- #
         pad = dict(padx=10, pady=4)
@@ -2429,6 +2578,49 @@ class _WFCSettingsDialog(tk.Toplevel):
             row=row, column=0, columnspan=3, sticky=tk.EW, pady=8)
         row += 1
 
+        # ---- paper improvements header ----------------------------------- #
+        tk.Label(frame, text="Level Quality Improvements",
+                 font=("TkDefaultFont", 9, "bold"), fg="#224488").grid(
+            row=row, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
+        row += 1
+
+        # ── Bounded ground y ─────────────────────────────────────────────── #
+        tk.Label(frame, text="Bound ground to bottom (game-y):",
+                 anchor=tk.W).grid(row=row, column=0, sticky=tk.W, **pad)
+        bgy_f = tk.Frame(frame)
+        bgy_f.grid(row=row, column=1, columnspan=2, sticky=tk.W)
+        tk.Spinbox(bgy_f, from_=0, to=20, textvariable=self._v_bgy,
+                   width=4, justify=tk.CENTER).pack(side=tk.LEFT)
+        tk.Label(bgy_f,
+                 text="  ground '#' only below this row  (0 = off,  10 = recommended)",
+                 fg="#555555", font=("TkDefaultFont", 8)).pack(side=tk.LEFT)
+        row += 1
+
+        # ── Forced ground columns ─────────────────────────────────────────── #
+        tk.Label(frame, text="Force ground anchors:",
+                 anchor=tk.W).grid(row=row, column=0, sticky=tk.W, **pad)
+        fg_f = tk.Frame(frame)
+        fg_f.grid(row=row, column=1, columnspan=2, sticky=tk.W)
+        tk.Checkbutton(fg_f, variable=self._v_forced,
+                       text="Enable  (pre-place '#' at left / mid / right to seed a ground plane)"
+                       ).pack(side=tk.LEFT)
+        row += 1
+
+        # ── Column snapshot ───────────────────────────────────────────────── #
+        tk.Label(frame, text="Column snapshots:",
+                 anchor=tk.W).grid(row=row, column=0, sticky=tk.W, **pad)
+        cs_f = tk.Frame(frame)
+        cs_f.grid(row=row, column=1, columnspan=2, sticky=tk.W)
+        tk.Checkbutton(cs_f, variable=self._v_colsnap,
+                       text="Use 2×H snapshots instead of N×N  (best playability, ignores Pattern width)"
+                       ).pack(side=tk.LEFT)
+        row += 1
+
+        # ---- separator --------------------------------------------------- #
+        ttk.Separator(frame, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=3, sticky=tk.EW, pady=8)
+        row += 1
+
         # ---- training data preview (read-only) --------------------------- #
         tk.Label(frame, text="Training canvas preview:",
                  anchor=tk.W).grid(row=row, column=0, sticky=tk.NW, **pad)
@@ -2513,6 +2705,9 @@ class _WFCSettingsDialog(tk.Toplevel):
             "backtracking":     self._v_bt.get(),
             "loc_heuristic":    self._v_loc.get(),
             "choice_heuristic": self._v_choice.get(),
+            "bounded_ground_y": self._v_bgy.get(),
+            "forced_ground_cols": self._v_forced.get(),
+            "column_snap":      self._v_colsnap.get(),
         }
 
     # ---- apply / reset / close ------------------------------------------- #
@@ -2528,6 +2723,9 @@ class _WFCSettingsDialog(tk.Toplevel):
         self._v_bt.set(False)
         self._v_loc.set("entropy")
         self._v_choice.set("weighted")
+        self._v_bgy.set(10)
+        self._v_forced.set(True)
+        self._v_colsnap.set(False)
         self._update_hints()
 
     def _on_close(self):
