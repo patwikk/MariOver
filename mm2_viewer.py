@@ -30,25 +30,30 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         import numpy as np
 
         # ------------------------------------------------------------------ #
-        # 1.  Build training tensor  (H, W, 1) of int64 code-points          #
+        # 1. Build training tensor                                           #
         # ------------------------------------------------------------------ #
         char_grid = np.array([list(row) for row in training_strings], dtype='U1')
+        train_h, train_w = char_grid.shape
+
+        # Slicing from bottom up ensures floor alignments remain intact
+        if train_h > out_h:
+            char_grid = char_grid[-out_h:, :]
+            _log(f"[WFC Worker] ── Sliced training canvas to bottom {out_h} rows for alignment.")
+        elif train_h < out_h:
+            padding = np.full((out_h - train_h, train_w), ' ', dtype='U1')
+            char_grid = np.vstack([padding, char_grid])
+            _log(f"[WFC Worker] ── Padded training canvas to match output height {out_h}.")
+        
+        train_h, train_w = char_grid.shape
         int_grid  = np.vectorize(ord)(char_grid).astype(np.int64)
         training_tensor = np.expand_dims(int_grid, axis=-1)
 
-        train_h, train_w = char_grid.shape
         total_cells = out_w * out_h
         _log(f"[WFC Worker] ── Training tensor: {train_w}w × {train_h}h")
         _log(f"[WFC Worker] ── Output target:   {out_w}w × {out_h}h  ({total_cells} cells)")
-        _log(f"[WFC Worker] ── Params: pattern_width={pattern_width}  "
-             f"attempts={attempt_limit}  backtracking={backtracking}  "
-             f"loc={loc_heuristic}  choice={choice_heuristic}  "
-             f"bounded_ground_y={bounded_ground_y}  "
-             f"forced_ground_cols={forced_ground_cols}  "
-             f"column_snap={column_snap}")
 
         # ------------------------------------------------------------------ #
-        # 2.  Build patterns, adjacency, wave                                 #
+        # 2. Extract Patterns and Build Custom Adjacency Rules               #
         # ------------------------------------------------------------------ #
         direction_offsets = list(enumerate([(0, -1), (1, 0), (0, 1), (-1, 0)]))
 
@@ -57,36 +62,54 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
 
         _log(f"[WFC Worker] ── Unique tiles: {len(tile_catalog)}")
 
-        # ── Column-snapshot mode (paper §3.3.3): use a 2×out_h rectangle
-        # instead of a square so each snapshot captures a full vertical slice.
-        # This was shown to increase playability dramatically (70 %+ success).
-        if column_snap:
-            snap_h = train_h   # full height of training canvas
-            snap_w = 2
-            _log(f"[WFC Worker] ── Column-snapshot mode: {snap_w}×{snap_h}")
-        else:
-            snap_h = pattern_width
-            snap_w = pattern_width
+        # Keep pattern constraints matching square execution sizes natively supported by the engine
+        snap_h = pattern_width
+        snap_w = pattern_width
 
         (pattern_catalog, pattern_weights,
          pattern_list, pattern_grid) = \
             wfc_control.make_pattern_catalog_with_rotations(
                 tile_grid,
-                pattern_width=snap_w,
+                pattern_width=pattern_width,
                 rotations=0,
                 input_is_periodic=False,
             )
 
-        _log(f"[WFC Worker] ── Patterns extracted: {len(pattern_catalog)}  "
-             f"(pattern_width={pattern_width})")
+        _log(f"[WFC Worker] ── Patterns extracted: {len(pattern_catalog)}")
 
-        adjacency_relations = wfc_control.adjacency_extraction(
-            pattern_grid,
-            pattern_catalog,
-            direction_offsets,
-            (snap_w, snap_w),
-        )
+        # Custom Adjacency extraction loop to safely prevent 0-rule drops
+        adjacency_relations = []
+        grid_h, grid_w = pattern_grid.shape[:2]
+        
+        for r in range(grid_h):
+            for c in range(grid_w):
+                p1_id = pattern_grid[r, c]
+                if p1_id not in pattern_catalog:
+                    continue
+                p1 = pattern_catalog[p1_id]
+                
+                for dir_idx, (dx, dy) in direction_offsets:
+                    nr, nc = r + dy, c + dx
+                    if 0 <= nr < grid_h and 0 <= nc < grid_w:
+                        p2_id = pattern_grid[nr, nc]
+                        if p2_id not in pattern_catalog:
+                            continue
+                        p2 = pattern_catalog[p2_id]
+                        
+                        match = True
+                        if dx == 1 and dy == 0:     # Right
+                            if not np.array_equal(p1[:, 1:], p2[:, :-1]): match = False
+                        elif dx == -1 and dy == 0:   # Left
+                            if not np.array_equal(p1[:, :-1], p2[:, 1:]): match = False
+                        elif dx == 0 and dy == 1:    # Down
+                            if not np.array_equal(p1[1:, :], p2[:-1, :]): match = False
+                        elif dx == 0 and dy == -1:   # Up
+                            if not np.array_equal(p1[:-1, :], p2[1:, :]): match = False
+                            
+                        if match:
+                            adjacency_relations.append(((dx, dy), p1_id, p2_id))
 
+        adjacency_relations = list(set(adjacency_relations))
         _log(f"[WFC Worker] ── Adjacency rules: {len(adjacency_relations)}")
 
         number_of_patterns = len(pattern_weights)
@@ -96,19 +119,46 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         adjacency_list = {}
         for _, adjacency in direction_offsets:
             adjacency_list[adjacency] = [set() for _ in pattern_weights]
+            
         for adjacency, pattern1, pattern2 in adjacency_relations:
-            adjacency_list[adjacency][encode_patterns[pattern1]].add(
-                encode_patterns[pattern2])
+            p1_encoded = encode_patterns[pattern1]
+            p2_encoded = encode_patterns[pattern2]
+            adjacency_list[adjacency][p1_encoded].add(p2_encoded)
 
         wave = wfc_control.makeWave(number_of_patterns, out_h, out_w, ground=None)
         adjacency_matrix = wfc_control.makeAdj(adjacency_list)
 
+        # ------------------------------------------------------------------ #
+        # 3. Frequency Tuning & Heuristics                                   #
+        # ------------------------------------------------------------------ #
+        AIR_ORD = ord(' ')
         encoded_weights = np.zeros(number_of_patterns, dtype=np.float64)
         for w_id, w_val in pattern_weights.items():
-            encoded_weights[encode_patterns[w_id]] = w_val
+            pat_idx = encode_patterns[w_id]
+            pd = pattern_catalog[w_id]
+            
+            air_cells = 0
+            total_pat_cells = pd.shape[0] * pd.shape[1]
+            for ri in range(pd.shape[0]):
+                for ci in range(pd.shape[1]):
+                    if tile_catalog[pd[ri, ci]][0, 0, 0] == AIR_ORD:
+                        air_cells += 1
+            
+            air_ratio = air_cells / total_pat_cells
+            # Aggressively boost mostly-air patterns so WFC strongly prefers open sky.
+            # Patterns that are >= 50% air get a large multiplier; pure-air patterns
+            # get the strongest boost. Non-air patterns keep their base weight.
+            if air_ratio >= 0.75:
+                encoded_weights[pat_idx] = w_val * 8.0
+            elif air_ratio >= 0.5:
+                encoded_weights[pat_idx] = w_val * 5.0
+            elif air_ratio >= 0.25:
+                encoded_weights[pat_idx] = w_val * 2.5
+            else:
+                encoded_weights[pat_idx] = w_val
+
         choice_random_weighting = np.random.random_sample(wave.shape[1:]) * 0.1
 
-        # ---- location heuristic ------------------------------------------ #
         loc_map = {
             "entropy":      lambda: wfc_control.makeEntropyLocationHeuristic(choice_random_weighting),
             "anti-entropy": lambda: wfc_control.makeAntiEntropyLocationHeuristic(choice_random_weighting),
@@ -118,97 +168,71 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             "random":       lambda: wfc_control.makeRandomLocationHeuristic(choice_random_weighting),
             "lexical":      lambda: wfc_control.lexicalLocationHeuristic,
         }
-        location_heuristic = loc_map.get(loc_heuristic,
-                                         loc_map["entropy"])()
+        location_heuristic = loc_map.get(loc_heuristic, loc_map["entropy"])()
 
-        # ---- pattern heuristic ------------------------------------------- #
         pat_map = {
             "weighted": lambda: wfc_control.makeWeightedPatternHeuristic(encoded_weights),
             "rarest":   lambda: wfc_control.makeRarestPatternHeuristic(encoded_weights),
             "random":   lambda: wfc_control.makeRandomPatternHeuristic(encoded_weights),
             "lexical":  lambda: wfc_control.lexicalPatternHeuristic,
         }
-        pattern_heuristic = pat_map.get(choice_heuristic,
-                                        pat_map["weighted"])()
-
-        _log(f"[WFC Worker] ── Setup complete. Starting solver…")
+        pattern_heuristic = pat_map.get(choice_heuristic, pat_map["weighted"])()
 
         # ------------------------------------------------------------------ #
-        # Paper improvement 1: BOUNDED TILE APPEARANCES (§3.2.2)             #
-        # Restrict ground '#' tiles so they can only appear at canvas rows    #
-        # >= (out_h - bounded_ground_y).  This prevents floating ground       #
-        # platforms from appearing near the top of the level.                 #
-        # bounded_ground_y is expressed as a game-y threshold: ground may     #
-        # only appear at game-y < bounded_ground_y (i.e. near the bottom).   #
+        # 4. Map Ground Properties and Inject Wave Constraints                #
         # ------------------------------------------------------------------ #
         GROUND_ORD = ord('#')
+        
+        # Build precise mapping of where ground elements exist inside each pattern configuration
+        pattern_ground_map = {}
+        for ph in pattern_list:
+            p_idx = encode_patterns[ph]
+            pd = pattern_catalog[ph]
+            ground_offsets = set()
+            for dr in range(pd.shape[0]):
+                for dc in range(pd.shape[1]):
+                    if tile_catalog[pd[dr, dc]][0, 0, 0] == GROUND_ORD:
+                        ground_offsets.add((dr, dc))
+            pattern_ground_map[p_idx] = ground_offsets
 
-        if bounded_ground_y is not None and bounded_ground_y > 0:
-            # canvas row index where game-y == bounded_ground_y
-            # canvas row 0 = top = highest game-y
-            bound_canvas_row = out_h - bounded_ground_y  # rows 0..bound_canvas_row-1 are "above" the bound
+        def apply_wave_constraints(wave_matrix):
+            # Enforce Bounded Ground Height Profile
+            if bounded_ground_y is not None and bounded_ground_y > 0:
+                bound_canvas_row = out_h - bounded_ground_y
+                for pr in range(out_h):
+                    for pc in range(out_w):
+                        for p_idx in range(number_of_patterns):
+                            if not wave_matrix[p_idx, pr, pc]: 
+                                continue
+                            for dr, dc in pattern_ground_map[p_idx]:
+                                if pr + dr < bound_canvas_row:
+                                    wave_matrix[p_idx, pr, pc] = False
+                                    break
 
-            def _pattern_contains_ground(pat_hash):
-                """Return True if any cell in this pattern is a '#' tile."""
-                pd = pattern_catalog[pat_hash]
-                for ri in range(pd.shape[0]):
-                    for ci in range(pd.shape[1]):
-                        tile_h = pd[ri, ci]
-                        if tile_catalog[tile_h][0, 0, 0] == GROUND_ORD:
-                            return True
-                return False
+            # Enforce Solid Anchor Points (Grow floors out from designated column metrics)
+            if forced_ground_cols:
+                for fc, fy in forced_ground_cols:
+                    target_row = out_h - 1 - fy
+                    target_col = fc
+                    
+                    for pr in range(out_h):
+                        for pc in range(out_w):
+                            dr = target_row - pr
+                            dc = target_col - pc
+                            # If the pattern coordinates overlap the exact targeted anchor point
+                            if 0 <= dr < snap_h and 0 <= dc < snap_w:
+                                for p_idx in range(number_of_patterns):
+                                    if not wave_matrix[p_idx, pr, pc]: 
+                                        continue
+                                    # Ban the pattern from this placement cell if it lacks a ground block at the intersection
+                                    if (dr, dc) not in pattern_ground_map[p_idx]:
+                                        wave_matrix[p_idx, pr, pc] = False
 
-            ground_pattern_indices = [
-                encode_patterns[ph]
-                for ph in pattern_list
-                if _pattern_contains_ground(ph)
-            ]
-            _log(f"[WFC Worker] ── Bounding ground: {len(ground_pattern_indices)} patterns "
-                 f"banned above canvas row {bound_canvas_row} (game-y >= {bounded_ground_y})")
-
-            # Ban all ground-containing patterns from cells above the bound
-            for r in range(bound_canvas_row):
-                for c in range(out_w):
-                    for gpi in ground_pattern_indices:
-                        if wave[gpi, r, c]:
-                            wave[gpi, r, c] = False
-
-        # ------------------------------------------------------------------ #
-        # Paper improvement 2: FORCED TILE PLACEMENTS (§3.2.1)               #
-        # Pre-collapse specific cells to '#' to encourage a continuous ground  #
-        # plane near the bottom.  forced_ground_cols is a list of             #
-        # (game_col, game_y) tuples.  We collapse those cells before the      #
-        # solver starts, which propagates ground adjacency outwards.          #
-        # ------------------------------------------------------------------ #
-        _forced_initial_wave = wave.copy()   # snapshot before forced placements
-
-        if forced_ground_cols:
-            # Find a ground pattern (the pattern whose [0,0] tile is '#')
-            ground_pat_idx = None
-            for ph in pattern_list:
-                pd = pattern_catalog[ph]
-                if tile_catalog[pd[0, 0]][0, 0, 0] == GROUND_ORD:
-                    ground_pat_idx = encode_patterns[ph]
-                    break
-
-            if ground_pat_idx is not None:
-                _log(f"[WFC Worker] ── Forcing ground at {len(forced_ground_cols)} positions "
-                     f"using pattern index {ground_pat_idx}")
-                for (fc, fy) in forced_ground_cols:
-                    canvas_r = out_h - 1 - fy
-                    if 0 <= canvas_r < out_h and 0 <= fc < out_w:
-                        # Collapse this cell to only the ground pattern
-                        wave[:, canvas_r, fc] = False
-                        wave[ground_pat_idx, canvas_r, fc] = True
-                        _log(f"[WFC Worker]   ↳ Forced '#' at col={fc} game_y={fy} "
-                             f"(canvas_row={canvas_r})")
-            else:
-                _log("[WFC Worker] ⚠ No ground pattern found — forced placements skipped")
-
-
+        apply_wave_constraints(wave)
+        _log(f"[WFC Worker] ── Constraints safely injected into wave grid. Starting solver…")
 
         # ------------------------------------------------------------------ #
-        # 3.  Mutable state shared across callbacks                           #
+        # 5. Shared Callback Implementations                                 #
         # ------------------------------------------------------------------ #
         state = {
             "step":                   0,
@@ -218,40 +242,24 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             "attempt":                1,
         }
 
-        # Effective snapshot width (column_snap uses snap_w=2)
-        _snap_w = snap_w
-
         def _decode_tile_at(wave_matrix, r, c):
-            """
-            Safely decodes an overlapping pattern at cell (r, c).
-            To resolve messy artifacts at structural boundaries, it looks at 
-            the patterns contributing to (r, c) instead of blindly picking [0,0].
-            """
-            # Search upwards and leftwards for patterns that overlap this cell
-            for dr in range(_snap_w):
-                for dc in range(_snap_w):
+            for dr in range(snap_h):
+                for dc in range(snap_w):
                     pr, pc = r - dr, c - dc
                     if 0 <= pr < out_h and 0 <= pc < out_w:
-                        # Check if this pattern position has a collapsed state
                         pat_wave = wave_matrix[:, pr, pc]
                         if np.sum(pat_wave) == 1:
                             enc_idx = int(np.argmax(pat_wave))
                             pat_hash = decode_patterns[enc_idx]
-                            # Instead of checking [0,0], check the relative internal index [dr, dc]
                             pattern_data = pattern_catalog[pat_hash]
                             if dr < pattern_data.shape[0] and dc < pattern_data.shape[1]:
                                 tile_hash = pattern_data[dr, dc]
-                                pixel = tile_catalog[tile_hash][0, 0, 0]
-                                return chr(int(pixel))
+                                return chr(int(tile_catalog[tile_hash][0, 0, 0]))
             
-            # Fallback behavior if direct neighborhood patterns aren't fully resolved yet
-            collapsed_mask = (np.sum(wave_matrix, axis=0) == 1)
-            if collapsed_mask[r, c]:
+            if np.sum(wave_matrix[:, r, c]) == 1:
                 enc_idx = int(np.argmax(wave_matrix[:, r, c]))
-                pat_hash = decode_patterns[enc_idx]
-                tile_hash = pattern_catalog[pat_hash][0, 0]
-                pixel = tile_catalog[tile_hash][0, 0, 0]
-                return chr(int(pixel))
+                tile_hash = pattern_catalog[decode_patterns[enc_idx]][0, 0]
+                return chr(int(tile_catalog[tile_hash][0, 0, 0]))
             return "?"
 
         def _wave_to_rows(w):
@@ -259,10 +267,7 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             for r in range(out_h):
                 line = []
                 for c in range(out_w):
-                    if (fixed_grid is not None
-                            and r < len(fixed_grid)
-                            and c < len(fixed_grid[r])
-                            and fixed_grid[r][c] is not None):
+                    if (fixed_grid is not None and r < len(fixed_grid) and c < len(fixed_grid[r]) and fixed_grid[r][c] is not None):
                         line.append(fixed_grid[r][c])
                     else:
                         line.append(_decode_tile_at(w, r, c))
@@ -272,97 +277,40 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         def on_backtrack():
             state["backtrack_count"]         += 1
             state["attempt_backtrack_count"] += 1
-            bt_n      = state["backtrack_count"]
-            bt_attempt = state["attempt_backtrack_count"]
-
-            if bt_n <= 20 or bt_attempt % 100 == 0:
+            if state["backtrack_count"] <= 20 or state["attempt_backtrack_count"] % 100 == 0:
                 snap = state["wave_snap"]
-                collapsed = 0
-                if snap is not None:
-                    collapsed = int(np.sum(np.sum(snap, axis=0) == 1))
-                pct = round(collapsed / max(total_cells, 1) * 100, 1)
-                _log(f"[WFC Worker]   ↩ Backtrack #{bt_n} "
-                     f"(#{bt_attempt} this attempt, "
-                     f"attempt {state['attempt']}/{attempt_limit})  "
-                     f"{collapsed}/{total_cells} cells ({pct}%) still collapsed")
+                collapsed = int(np.sum(np.sum(snap, axis=0) == 1)) if snap is not None else 0
+                _log(f"[WFC Worker]   ↩ Backtrack #{state['backtrack_count']} ({collapsed}/{total_cells} cells collapsed)")
 
-            bt_cap = total_cells * 5
-            if bt_attempt >= bt_cap:
-                _log(f"[WFC Worker] ⚠ Backtrack cap hit "
-                     f"({bt_attempt} backtracks this attempt, cap={bt_cap})  "
-                     f"— forcing fresh restart")
-                raise wfc_control.Contradiction(
-                    f"Backtrack cap {bt_cap} exceeded on attempt "
-                    f"{state['attempt']} — restarting fresh"
-                )
+            if state["attempt_backtrack_count"] >= total_cells * 5:
+                raise wfc_control.Contradiction("Backtrack threshold hit.")
 
         def on_choice(row, col, pattern_id):
             state["step"] += 1
-            step = state["step"]
-
             if (cancel_event is not None and cancel_event.is_set()):
-                raise wfc_control.StopEarly("Cancelled by user.")
+                raise wfc_control.StopEarly("Cancelled.")
 
-            if (pause_event is not None and pause_event.is_set()):
-                snap = _wave_to_rows(state["wave_snap"]) \
-                    if state["wave_snap"] is not None \
-                    else ["?" * out_w for _ in range(out_h)]
+            if state["step"] % REPORT_EVERY == 0 or state["step"] == 1:
+                snap = _wave_to_rows(state["wave_snap"]) if state["wave_snap"] is not None else ["?" * out_w for _ in range(out_h)]
                 collapsed = sum(1 for r in snap for ch in r if ch != "?")
-                pct = round(collapsed / max(total_cells, 1) * 100, 1)
-                _log(f"[WFC Worker] ⏸  PAUSED at step {step}  "
-                     f"({collapsed}/{total_cells} = {pct}%)")
-                q.put(("PAUSED", collapsed, total_cells, snap))
-                while pause_event is not None and pause_event.is_set():
-                    time.sleep(0.05)
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise wfc_control.StopEarly("Cancelled during pause.")
-                _log(f"[WFC Worker] ▶  RESUMED at step {step}")
-
-            if step % REPORT_EVERY == 0 or step == 1:
-                snap = _wave_to_rows(state["wave_snap"]) \
-                    if state["wave_snap"] is not None \
-                    else ["?" * out_w for _ in range(out_h)]
-                collapsed = sum(1 for r in snap for ch in r if ch != "?")
-                pct = round(collapsed / max(total_cells, 1) * 100, 1)
-                bt_info = (f"  [{state['backtrack_count']} backtracks]"
-                           if state["backtrack_count"] > 0 else "")
-                print(f"[WFC Worker] Step {step:6d} | "
-                      f"{collapsed}/{total_cells} cells ({pct}%){bt_info}")
                 q.put(("PROGRESS", collapsed, total_cells, snap))
 
         def on_observe(w):
             state["wave_snap"] = w.copy()
 
         # ------------------------------------------------------------------ #
-        # 4.  Run the solver with retries on contradiction                    #
+        # 6. Retry Processing Loop                                           #
         # ------------------------------------------------------------------ #
         solution = None
         for attempt in range(1, attempt_limit + 1):
             state["attempt"] = attempt
             state["attempt_backtrack_count"] = 0
             if attempt > 1:
-                _log(f"[WFC Worker] ── Attempt {attempt}/{attempt_limit}  "
-                     f"(total backtracks so far: {state['backtrack_count']})")
+                _log(f"[WFC Worker] ── Attempt {attempt}/{attempt_limit}")
                 state["step"]      = 0
                 state["wave_snap"] = None
                 wave = wfc_control.makeWave(number_of_patterns, out_h, out_w, ground=None)
-
-                # Re-apply bounded tile appearance restriction
-                if bounded_ground_y is not None and bounded_ground_y > 0:
-                    bound_canvas_row = out_h - bounded_ground_y
-                    for r in range(bound_canvas_row):
-                        for c in range(out_w):
-                            for gpi in ground_pattern_indices:
-                                if wave[gpi, r, c]:
-                                    wave[gpi, r, c] = False
-
-                # Re-apply forced placements
-                if forced_ground_cols and ground_pat_idx is not None:
-                    for (fc, fy) in forced_ground_cols:
-                        canvas_r = out_h - 1 - fy
-                        if 0 <= canvas_r < out_h and 0 <= fc < out_w:
-                            wave[:, canvas_r, fc] = False
-                            wave[ground_pat_idx, canvas_r, fc] = True
+                apply_wave_constraints(wave)
 
             try:
                 solution = wfc_control.run(
@@ -376,62 +324,39 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
                     onChoice=on_choice,
                     onObserve=on_observe,
                 )
-                _log(f"[WFC Worker] ── Attempt {attempt} succeeded  "
-                     f"({state['step']} steps, "
-                     f"after {state['backtrack_count']} total backtracks)")
+                _log(f"[WFC Worker] ── Attempt {attempt} succeeded.")
                 break
 
-            except wfc_control.StopEarly as exc:
-                q.put(("ERROR", f"Cancelled: {exc}"))
+            except wfc_control.StopEarly:
+                q.put(("ERROR", "Cancelled by user."))
                 return
-
             except wfc_control.Contradiction as exc:
-                snap = state["wave_snap"]
-                collapsed = int(np.sum(np.sum(snap, axis=0) == 1)) if snap is not None else 0
-                pct = round(collapsed / max(total_cells, 1) * 100, 1)
-                _log(f"[WFC Worker] ✗ Contradiction on attempt {attempt}/{attempt_limit}  "
-                     f"at step {state['step']}  "
-                     f"({collapsed}/{total_cells} cells = {pct}% done)  "
-                     f"— {exc}")
+                _log(f"[WFC Worker] ✗ Contradiction on attempt {attempt}: {exc}")
                 if attempt == attempt_limit:
-                    q.put(("ERROR",
-                           f"All {attempt_limit} attempts failed with contradictions.\n"
-                           f"Try a larger pattern_width, more training data, or enable backtracking."))
+                    q.put(("ERROR", "All generation paths ended in a contradiction. Try expanding the training sample range."))
                     return
-
             except wfc_control.TimedOut as exc:
-                _log(f"[WFC Worker] ✗ TimedOut: {exc}")
                 q.put(("ERROR", str(exc)))
                 return
 
         # ------------------------------------------------------------------ #
-        # 5.  Decode solution → ASCII rows                                    #
+        # 7. Decode Target Output Strings                                    #
         # ------------------------------------------------------------------ #
         result_strings = []
-        # Convert full single-choice array into a simulated fully resolved wave matrix for the utility helper
         final_wave = np.zeros((number_of_patterns, out_h, out_w), dtype=np.int32)
         for r in range(out_h):
             for c in range(out_w):
-                pat_idx = int(solution[r, c])
-                final_wave[pat_idx, r, c] = 1
+                final_wave[int(solution[r, c]), r, c] = 1
 
         for r in range(out_h):
             line = []
             for c in range(out_w):
-                if (fixed_grid is not None
-                        and r < len(fixed_grid)
-                        and c < len(fixed_grid[r])
-                        and fixed_grid[r][c] is not None):
+                if (fixed_grid is not None and r < len(fixed_grid) and c < len(fixed_grid[r]) and fixed_grid[r][c] is not None):
                     line.append(fixed_grid[r][c])
                 else:
                     line.append(_decode_tile_at(final_wave, r, c))
             result_strings.append("".join(line))
 
-        _log(f"[WFC Worker] ✓ Done — {len(result_strings)} rows × "
-             f"{len(result_strings[0]) if result_strings else 0} cols  "
-             f"after {state['step']} steps  "
-             f"({state['backtrack_count']} backtracks across "
-             f"{state['attempt']} attempt(s))")
         q.put(("SUCCESS", result_strings))
 
     except Exception as exc:
@@ -850,13 +775,13 @@ class MM2Viewer(tk.Tk):
         self.wfc_params = {
             "width":          0,      # 0 = auto
             "height":         0,      # 0 = auto
-            "pattern_width":  2,      # neighbourhood size (N-gram width)
+            "pattern_width":  3,      # neighbourhood size — 3 gives much tighter constraints
             "attempt_limit":  10,     # contradiction retries before giving up
             "backtracking":   False,  # backtracking (slow but more thorough)
             "loc_heuristic":  "entropy",   # cell-selection strategy
             "choice_heuristic": "weighted", # pattern-selection strategy
             # Paper improvements:
-            "bounded_ground_y": 10,   # ground '#' only allowed below this game-y (0=off)
+            "bounded_ground_y": 6,    # ground '#' only allowed in bottom 6 rows (0=off)
             "forced_ground_cols": True,  # force ground tiles at start/mid/end of level
             "column_snap":    False,  # use 2×H column snapshots instead of N×N
         }
@@ -1167,7 +1092,22 @@ class MM2Viewer(tk.Tk):
             col_offsets.append(total_width)
             total_width += _level_tile_width(lvl) + 1
 
-        ascii_canvas = [["." for _ in range(total_width)] for _ in range(dynamic_height)]
+        # Object types kept in the training canvas.
+        # Restricting to structural tiles teaches WFC clean Mario geometry:
+        # solid blocks, pipes, and a few common platform types.
+        # Enemies, items, hazards, and decorations are excluded — they are too
+        # sparse and varied to form useful WFC patterns and only produce noise.
+        TRAINING_WHITELIST = {
+            "ground", "_ground_tile",
+            "block", "hard_block", "question_block", "note_block",
+            "ice_block", "spike_block", "on_off_block", "crate", "stone",
+            "slight_slope", "steep_slope",
+            "pipe",
+            "lift", "semisolid_platform", "bridge",
+            "spike_block", "muncher",
+        }
+
+        ascii_canvas = [[" " for _ in range(total_width)] for _ in range(dynamic_height)]
 
         def _canvas_row(ty_game):
             return (dynamic_height - 1) - (ty_game - min_y)
@@ -1190,8 +1130,11 @@ class MM2Viewer(tk.Tk):
                 row = _canvas_row(ty)
                 if 0 <= row < dynamic_height:
                     name_str = obj_id_to_str(o.get("id", 0))
+                    # Only write whitelisted structural objects into training data
+                    if name_str not in TRAINING_WHITELIST:
+                        continue
                     ch = ASCII_MAP.get(name_str, "?")
-                    if ascii_canvas[row][tx + x_off] == ".":
+                    if ascii_canvas[row][tx + x_off] == " ":
                         ascii_canvas[row][tx + x_off] = ch
 
         training_strings = ["".join(row) for row in ascii_canvas]
@@ -1256,7 +1199,7 @@ class MM2Viewer(tk.Tk):
                 elif sc == 3 and game_y == _start_y:
                     row_chars.append("S")
                 else:
-                    row_chars.append(".")
+                    row_chars.append(" ")
             zone_start_rows.append("".join(row_chars))
 
         # Build the goal-zone columns as a list of per-row strings
@@ -1271,7 +1214,7 @@ class MM2Viewer(tk.Tk):
                 elif gc == 0 and game_y == _goal_y:
                     row_chars.append("G")
                 else:
-                    row_chars.append(".")
+                    row_chars.append(" ")
             zone_goal_rows.append("".join(row_chars))
 
         training_strings = ["".join(row) for row in ascii_canvas]
@@ -1341,7 +1284,7 @@ class MM2Viewer(tk.Tk):
                 for gy in range(0, _sy):
                     _set(sc, gy, "#")
                 for gy in range(_sy, gen_height):
-                    _set(sc, gy, ".")
+                    _set(sc, gy, " ")
             _set(3, _sy, "S")
 
             # Safety-net: re-stamp the goal zone
@@ -1352,7 +1295,7 @@ class MM2Viewer(tk.Tk):
                 for gy in range(0, _gy_val):
                     _set(col_abs, gy, "#")
                 for gy in range(_gy_val, gen_height):
-                    _set(col_abs, gy, ".")
+                    _set(col_abs, gy, " ")
             _set(_gc, _gy_val, "G")
 
             print(f"[Decode] Start zone: cols 0-{START_W-1}  start_y={_sy}")
@@ -1362,6 +1305,113 @@ class MM2Viewer(tk.Tk):
             _sy     = current_level_dict.get("start_y", 1)
             _gy_val = int(current_level_dict.get("goal_y_raw", 1))
             _gc     = int(current_level_dict.get("goal_x_raw", 0)) // 10
+
+        # ------------------------------------------------------------------ #
+        # Structural cleanup pass — run before conversion to objects/ground   #
+        # ------------------------------------------------------------------ #
+        # 1. Remove any object tile that has no solid support within 1 tile
+        #    below it (i.e. floating enemies, items, hazards).  Ground '#'
+        #    tiles are left untouched — connectivity of those is handled by
+        #    the WFC constraints.
+        # 2. Remove isolated single-column walls (a '#' column that is
+        #    completely surrounded by air on both its left and right side at
+        #    every row) — these look like random pillars.
+        # Characters that represent platforms/blocks which CAN float by design:
+        FLOAT_OK = {
+            ".", " ", "#", "S", "G", "X",   # structural / skip chars
+            "´",   # semisolid_platform  (floats by design)
+            "³",   # mushroom_platform
+            "·",   # bridge
+            "¸",   # lava_lift
+            "-",   # lift / moving platform
+            "Ì",   # cloud (decoration)
+        }
+
+        def _has_support(r, c):
+            """True if grid[r][c] has a '#' or whitelisted platform directly below."""
+            below = r + 1
+            if below >= gen_height:
+                return True   # bottom row is always supported
+            ch_below = grid[below][c] if c < len(grid[below]) else " "
+            return ch_below in ("#",)
+
+        # Remove floating non-structural tiles
+        removed = 0
+        for r in range(gen_height):
+            for c in range(len(grid[r])):
+                ch = grid[r][c]
+                if ch in FLOAT_OK:
+                    continue
+                if not _has_support(r, c):
+                    grid[r][c] = " "
+                    removed += 1
+        if removed:
+            print(f"[Decode] Removed {removed} floating non-ground objects.")
+
+        # Remove isolated single-tile '#' pillars (no '#' neighbour left or right)
+        pillars = 0
+        for r in range(gen_height):
+            for c in range(len(grid[r])):
+                if grid[r][c] != "#":
+                    continue
+                left_ok  = (c > 0 and grid[r][c-1] == "#")
+                right_ok = (c < len(grid[r]) - 1 and grid[r][c+1] == "#")
+                above_ok = (r > 0 and c < len(grid[r-1]) and grid[r-1][c] == "#")
+                below_ok = (r < gen_height - 1 and c < len(grid[r+1]) and grid[r+1][c] == "#")
+                if not (left_ok or right_ok or above_ok or below_ok):
+                    grid[r][c] = " "
+                    pillars += 1
+        if pillars:
+            print(f"[Decode] Removed {pillars} isolated '#' pillars.")
+
+        # ------------------------------------------------------------------ #
+        # Controlled enemy/item scatter — sparse, on-ground only             #
+        # WFC is not asked to place these; we do it here with strict rules.  #
+        # ------------------------------------------------------------------ #
+        import random as _rng_post
+        # Build a set of ground-top positions (col, game_y+1) where an enemy can stand
+        ground_set = set()
+        for r in range(gen_height):
+            game_y_here = (gen_height - 1 - r)
+            for c in range(len(grid[r])):
+                if grid[r][c] == "#":
+                    ground_set.add((c, game_y_here + 1))
+
+        # Filter to cells that are actually empty air
+        valid_spots = []
+        for (c, gy_above) in ground_set:
+            r_above = gen_height - 1 - gy_above
+            if 0 <= r_above < gen_height and c < len(grid[r_above]):
+                if grid[r_above][c] in (" ", "."):
+                    # Skip start zone (cols 0-6) and goal zone (last 11 cols)
+                    if c >= 7 and c < actual_w - 11:
+                        valid_spots.append((r_above, c))
+
+        # Place a small number of goombas and coins — roughly 1 per 25 ground tiles
+        n_enemies = max(0, len(valid_spots) // 25)
+        n_coins   = max(0, len(valid_spots) // 15)
+        _rng_post.shuffle(valid_spots)
+        placed = 0
+        used = set()
+        for (r_spot, c_spot) in valid_spots:
+            if placed >= n_enemies:
+                break
+            if (r_spot, c_spot) in used:
+                continue
+            grid[r_spot][c_spot] = "g"   # goomba
+            used.add((r_spot, c_spot))
+            placed += 1
+        coin_placed = 0
+        for (r_spot, c_spot) in valid_spots:
+            if coin_placed >= n_coins:
+                break
+            if (r_spot, c_spot) in used:
+                continue
+            # Place coins 1 tile above ground (already the cell above ground)
+            grid[r_spot][c_spot] = "¢"
+            used.add((r_spot, c_spot))
+            coin_placed += 1
+        print(f"[Decode] Scattered {placed} goombas, {coin_placed} coins on valid ground.")
 
         # ------------------------------------------------------------------ #
         # Convert the grid → objects + ground lists                           #
@@ -1494,7 +1544,7 @@ class MM2Viewer(tk.Tk):
         )
         wfc_process.start()
 
-        WFC_TIMEOUT = 5000.0
+        WFC_TIMEOUT = 500000.0
         start_time  = time.monotonic()
 
         # Progress dialog shows the full level width so the preview canvas
