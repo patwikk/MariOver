@@ -4,7 +4,8 @@
 def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
                              pause_event=None, cancel_event=None,
                              attempt_limit=10, backtracking=False,
-                             loc_heuristic="entropy", choice_heuristic="weighted"):
+                             loc_heuristic="entropy", choice_heuristic="weighted",
+                             fixed_grid=None):
     """
     Runs WFC inside a subprocess, emitting real-time progress messages through
     *q* so the UI can track collapse progress tile-by-tile, render partial
@@ -24,6 +25,10 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
                               spiral/hilbert/simple/random/lexical)
     choice_heuristic  : str   pattern-selection strategy (weighted/rarest/
                               random/lexical)
+    fixed_grid        : list[list[str|None]] or None
+                        Canvas-ordered (row 0 = top) grid of out_h rows × out_w
+                        cols.  A str entry means that cell is pre-collapsed to
+                        that character; None means WFC decides freely.
 
     Queue message protocol
     ----------------------
@@ -113,6 +118,16 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             encoded_weights[encode_patterns[w_id]] = w_val
         choice_random_weighting = np.random.random_sample(wave.shape[1:]) * 0.1
 
+        # ------------------------------------------------------------------ #
+        # fixed_grid overlay helper: when building a snapshot for the UI,    #
+        # overwrite cells that belong to the hardcoded start/goal zones so   #
+        # the progress view always shows the correct boundary tiles.          #
+        # The worker does NOT pre-collapse the wave for these cells — the     #
+        # fixed zones are carved out of the output width before calling WFC  #
+        # (see _launch_wfc_async) so the wave only covers the free middle.   #
+        # fixed_grid rows/cols are already relative to the middle section.   #
+        # ------------------------------------------------------------------ #
+
         # ---- location heuristic ------------------------------------------ #
         loc_map = {
             "entropy":      lambda: wfc_control.makeEntropyLocationHeuristic(choice_random_weighting),
@@ -156,7 +171,13 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
             for r in range(out_h):
                 line = []
                 for c in range(out_w):
-                    if collapsed_mask[r, c]:
+                    # Fixed cells always show their hardcoded character
+                    if (fixed_grid is not None
+                            and r < len(fixed_grid)
+                            and c < len(fixed_grid[r])
+                            and fixed_grid[r][c] is not None):
+                        line.append(fixed_grid[r][c])
+                    elif collapsed_mask[r, c]:
                         enc_idx   = int(chosen_ids[r, c])
                         pat_hash  = decode_patterns[enc_idx]
                         tile_hash = pattern_catalog[pat_hash][0, 0]
@@ -300,11 +321,18 @@ def global_ascii_wfc_worker(training_strings, q, out_w, out_h, pattern_width,
         for r in range(out_h):
             line = []
             for c in range(out_w):
-                enc_idx   = int(solution[r, c])
-                pat_hash  = decode_patterns[enc_idx]
-                tile_hash = pattern_catalog[pat_hash][0, 0]
-                pixel     = tile_catalog[tile_hash][0, 0, 0]
-                line.append(chr(int(pixel)))
+                # Fixed cells win unconditionally
+                if (fixed_grid is not None
+                        and r < len(fixed_grid)
+                        and c < len(fixed_grid[r])
+                        and fixed_grid[r][c] is not None):
+                    line.append(fixed_grid[r][c])
+                else:
+                    enc_idx   = int(solution[r, c])
+                    pat_hash  = decode_patterns[enc_idx]
+                    tile_hash = pattern_catalog[pat_hash][0, 0]
+                    pixel     = tile_catalog[tile_hash][0, 0, 0]
+                    line.append(chr(int(pixel)))
             result_strings.append("".join(line))
 
         _log(f"[WFC Worker] ✓ Done — {len(result_strings)} rows × "
@@ -1077,21 +1105,101 @@ class MM2Viewer(tk.Tk):
         print(f"[ASCII WFC] Training canvas: {total_width}w x {dynamic_height}h")
         print(f"[ASCII WFC] Output target:   {gen_width}w x {gen_height}h")
 
-        # Store min_y on the dict so _decode_wfc_result can use it
-        current_level_dict["_wfc_min_y"] = min_y
+        # ------------------------------------------------------------------ #
+        # Hardcode start and goal zones — STITCH approach.                    #
+        #                                                                      #
+        # Instead of constraining WFC cells (which causes contradictions),    #
+        # we build the start and goal zones as plain string rows and tell     #
+        # WFC to generate only the MIDDLE section.  After WFC finishes the   #
+        # zones are stitched onto the left/right edges of the output.         #
+        #                                                                      #
+        # Start zone: columns 0–6 (START_W = 7).                             #
+        # Goal  zone: rightmost GOAL_W = 11 columns.                          #
+        # Middle:     gen_width - START_W - GOAL_W columns, ≥ 10.            #
+        #                                                                      #
+        # y=0 = bottom row.  start_y / goal_y clamped to [1, gen_height-2]   #
+        # so there is always ≥1 ground tile AND ≥1 air tile.                 #
+        # ------------------------------------------------------------------ #
+        import random as _rng
 
-        return training_strings, gen_width, gen_height, current_level_dict
+        START_W  = 7
+        GOAL_W   = 11
+        _y_lo    = 1
+        _y_hi    = max(1, gen_height - 2)
+
+        _start_y = _rng.randint(_y_lo, min(3, _y_hi))
+        _goal_y  = _rng.randint(_y_lo, min(3, _y_hi))
+
+        # How wide is the middle (free) section WFC will generate?
+        middle_w = max(10, gen_width - START_W - GOAL_W)
+        # Recompute total output width to exactly START_W + middle_w + GOAL_W
+        gen_width = START_W + middle_w + GOAL_W
+
+        # Canvas-row helper: game-y 0 = bottom → canvas row gen_height-1
+        def _crow(gy):
+            return gen_height - 1 - gy
+
+        # Build the start-zone columns as a list of per-row strings
+        # zone_start_rows[r] = string of START_W characters, canvas-ordered
+        zone_start_rows = []
+        for r in range(gen_height):
+            game_y = gen_height - 1 - r
+            row_chars = []
+            for sc in range(START_W):
+                if game_y < _start_y:
+                    row_chars.append("#")
+                elif sc == 3 and game_y == _start_y:
+                    row_chars.append("S")
+                else:
+                    row_chars.append(".")
+            zone_start_rows.append("".join(row_chars))
+
+        # Build the goal-zone columns as a list of per-row strings
+        # zone_goal_rows[r] = string of GOAL_W characters, canvas-ordered
+        zone_goal_rows = []
+        for r in range(gen_height):
+            game_y = gen_height - 1 - r
+            row_chars = []
+            for gc in range(GOAL_W):
+                if game_y < _goal_y:
+                    row_chars.append("#")
+                elif gc == 0 and game_y == _goal_y:
+                    row_chars.append("G")
+                else:
+                    row_chars.append(".")
+            zone_goal_rows.append("".join(row_chars))
+
+        training_strings = ["".join(row) for row in ascii_canvas]
+        self._last_training_strings = training_strings
+
+        print(f"[ASCII WFC] Start zone: {START_W} cols  start_y={_start_y}")
+        print(f"[ASCII WFC] Goal  zone: {GOAL_W} cols  goal_y={_goal_y}")
+        print(f"[ASCII WFC] Middle WFC section: {middle_w} cols")
+        print(f"[ASCII WFC] Total output width: {gen_width} cols")
+
+        # Store everything needed for stitching and metadata
+        current_level_dict["_wfc_min_y"]         = min_y
+        current_level_dict["_wfc_start_y"]        = _start_y
+        current_level_dict["_wfc_goal_y"]          = _goal_y
+        current_level_dict["_wfc_goal_col"]        = START_W + middle_w  # abs col of 'G'
+        current_level_dict["_wfc_start_w"]         = START_W
+        current_level_dict["_wfc_goal_w"]          = GOAL_W
+        current_level_dict["_wfc_middle_w"]        = middle_w
+
+        # Store the pre-built zone rows on self so _poll_wfc can stitch them
+        self._wfc_zone_start_rows = zone_start_rows
+        self._wfc_zone_goal_rows  = zone_goal_rows
+        self._wfc_fixed_grid      = None   # no longer used for wave pre-collapse
+
+        return training_strings, middle_w, gen_height, current_level_dict
 
     def _decode_wfc_result(self, generated_rows, current_level_dict,
                             skip_spawn_passes=False):
         """Turn WFC ASCII output back into ground + object lists.
 
-        After decoding the raw WFC grid, two spawn-safety passes are applied
-        before any objects are committed (skipped when skip_spawn_passes=True,
-        e.g. when loading an exported ASCII file that already has them baked in):
-
-        Pass 1 — Clear zone (7 × 3 rectangle around the spawn point)
-        Pass 2 — Foundation column beneath the spawn point
+        The fixed_grid (start/goal zones) is already overlaid on generated_rows
+        by the worker.  Here we apply it once more as a safety net, write the
+        correct metadata, and convert the grid to the level-dict format.
         """
         actual_w   = len(generated_rows[0]) if generated_rows else 0
         actual_h   = len(generated_rows)
@@ -1100,57 +1208,59 @@ class MM2Viewer(tk.Tk):
 
         print(f"[ASCII WFC] Received output {actual_w}w x {actual_h}h")
 
-        # Work on a mutable 2-D list so we can apply the spawn constraints
-        # before iterating.  Rows are canvas-ordered (row 0 = top of screen).
         grid = [list(row_str) for row_str in generated_rows]
 
-        # Helper: convert game-Y (0 = bottom) ↔ canvas row (0 = top)
-        def game_y_to_row(gy):
-            return (gen_height - 1) - (gy - min_y)
+        # Retrieve the zone parameters set by apply_wfc_generation
+        _wfc_start_y  = current_level_dict.pop("_wfc_start_y",  None)
+        _wfc_goal_y   = current_level_dict.pop("_wfc_goal_y",   None)
+        _wfc_goal_col = current_level_dict.pop("_wfc_goal_col", None)
 
-        start_y     = current_level_dict.get("start_y", 1)
-        spawn_col   = 3          # fixed: Mario always spawns at tile column 3
-        clear_half  = 3          # 3 tiles left + spawn + 3 tiles right = 7 wide
-        clear_above = 2          # spawn row + 2 rows above = 3 tall total
+        if not skip_spawn_passes:
+            START_W = 7
+            GOAL_W  = 11
+            _sy     = _wfc_start_y  if _wfc_start_y  is not None else 1
+            _gy_val = _wfc_goal_y   if _wfc_goal_y   is not None else 1
+            _gc     = _wfc_goal_col if _wfc_goal_col is not None else max(0, actual_w - GOAL_W)
 
-        # ------------------------------------------------------------------ #
-        # Pass 1 & 2: spawn constraints — skip for ASCII loads               #
-        # ------------------------------------------------------------------ #
-        if skip_spawn_passes:
-            print(f"[Decode] Skipping spawn passes (ASCII load — already baked in)")
+            # canvas-row helper (game-y 0 = bottom → row gen_height-1)
+            def _crow(gy):
+                return gen_height - 1 - gy
+
+            def _set(col, game_y, ch):
+                r = _crow(game_y)
+                if 0 <= r < gen_height and 0 <= col < actual_w:
+                    grid[r][col] = ch
+
+            # Safety-net: re-stamp the start zone
+            for sc in range(START_W):
+                for gy in range(0, _sy):
+                    _set(sc, gy, "#")
+                for gy in range(_sy, gen_height):
+                    _set(sc, gy, ".")
+            _set(3, _sy, "S")
+
+            # Safety-net: re-stamp the goal zone
+            for gc in range(GOAL_W):
+                col_abs = _gc + gc
+                if col_abs >= actual_w:
+                    continue
+                for gy in range(0, _gy_val):
+                    _set(col_abs, gy, "#")
+                for gy in range(_gy_val, gen_height):
+                    _set(col_abs, gy, ".")
+            _set(_gc, _gy_val, "G")
+
+            print(f"[Decode] Start zone: cols 0-{START_W-1}  start_y={_sy}")
+            print(f"[Decode] Goal  zone: cols {_gc}-{_gc+GOAL_W-1}  goal_y={_gy_val}")
         else:
-            for dy in range(clear_above + 1):          # 0, 1, 2
-                gy  = start_y + dy
-                row = game_y_to_row(gy)
-                if not (0 <= row < gen_height):
-                    continue
-                for dc in range(-clear_half, clear_half + 1):   # -3 … +3
-                    col = spawn_col + dc
-                    if 0 <= col < actual_w:
-                        grid[row][col] = "."
-
-            clear_count = (clear_half * 2 + 1) * (clear_above + 1)
-            print(f"[Spawn] Cleared {clear_half*2+1}×{clear_above+1} zone "
-                  f"at col {spawn_col - clear_half}–{spawn_col + clear_half}, "
-                  f"game-y {start_y}–{start_y + clear_above}  "
-                  f"({clear_count} cells forced empty)")
-
-            # Pass 2: enforce solid foundation below the spawn column
-            foundation_placed = 0
-            for gy in range(0, start_y):               # game rows below spawn
-                row = game_y_to_row(gy)
-                if not (0 <= row < gen_height):
-                    continue
-                if grid[row][spawn_col] != "#":
-                    grid[row][spawn_col] = "#"
-                    foundation_placed += 1
-
-            print(f"[Spawn] Placed {foundation_placed} foundation blocks "
-                  f"in column {spawn_col} below game-y {start_y}")
+            print(f"[Decode] Skipping zone stamp (ASCII load — already baked in)")
+            _sy     = current_level_dict.get("start_y", 1)
+            _gy_val = int(current_level_dict.get("goal_y_raw", 1))
+            _gc     = int(current_level_dict.get("goal_x_raw", 0)) // 10
 
         # ------------------------------------------------------------------ #
-        # Convert the patched grid → objects + ground lists                  #
-        # S / G / X are layout markers, not game objects — skip them         #
+        # Convert the grid → objects + ground lists                           #
+        # S / G / X are layout markers, not game objects — skip them          #
         # ------------------------------------------------------------------ #
         SKIP_CHARS = {".", "-", " ", "S", "G", "X"}
         current_level_dict["objects"] = []
@@ -1181,25 +1291,18 @@ class MM2Viewer(tk.Tk):
 
         current_level_dict["boundary_right"] = actual_w * 16
 
-        # For WFC-generated levels: overwrite stale source metadata.
-        # For ASCII loads (skip_spawn_passes=True): all metadata was already
-        # set correctly from the file scan — don't touch it.
         if not skip_spawn_passes:
             n_ground  = len(current_level_dict["ground"])
             n_objects = len(current_level_dict["objects"])
-            current_level_dict["name"] = (
-                f"WFC Generated  ({actual_w}\u00d7{actual_h})"
-            )
-            # Clear raw goal coords so the renderer computes them from scratch.
-            current_level_dict.pop("goal_x_raw", None)
-            current_level_dict.pop("goal_y_raw", None)
-            current_level_dict["goal_x_raw"] = 0
-            current_level_dict["goal_y_raw"] = 0
-            # Subworld data is irrelevant for a freshly generated level
+            current_level_dict["name"]      = f"WFC Generated  ({actual_w}\u00d7{actual_h})"
+            current_level_dict["start_y"]   = _sy
+            current_level_dict["goal_x_raw"] = _gc * 10   # renderer: goal_base_col = goal_x_raw // 10
+            current_level_dict["goal_y_raw"] = _gy_val
             current_level_dict["subworld_objects"] = []
             current_level_dict["subworld_ground"]  = []
-            print(f"[Decode] Final level: '{current_level_dict['name']}'  "
-                  f"{n_ground} ground tiles  {n_objects} objects")
+            print(f"[Decode] Final: '{current_level_dict['name']}'  "
+                  f"{n_ground} ground  {n_objects} objects  "
+                  f"start_y={_sy}  goal_col={_gc}  goal_y={_gy_val}")
 
         return current_level_dict
 
@@ -1208,6 +1311,10 @@ class MM2Viewer(tk.Tk):
         Build the training data, spawn the WFC subprocess, show the progress
         dialog, and start the poll loop.  Returns immediately — the UI stays
         fully responsive.
+
+        The worker generates only the MIDDLE section of the level
+        (gen_width - START_W - GOAL_W columns).  The fixed start/goal zone
+        rows are stitched back on when SUCCESS arrives in _poll_wfc.
 
         Two multiprocessing.Event objects are passed to the worker:
           _wfc_pause_event  — set to pause, cleared to resume
@@ -1225,11 +1332,18 @@ class MM2Viewer(tk.Tk):
         loc_h    = str(p.get("loc_heuristic",  "entropy"))
         choice_h = str(p.get("choice_heuristic", "weighted"))
 
-        # Build canvas (fast, in-process)
-        training_strings, gen_width, gen_height, base_level = \
+        # Build canvas (fast, in-process).
+        # apply_wfc_generation now returns middle_w as gen_width — the worker
+        # only generates the free middle section.
+        training_strings, middle_w, gen_height, base_level = \
             self.apply_wfc_generation(base_level,
                                       override_width=user_w or None,
                                       override_height=user_h or None)
+
+        # Full output width (for progress dialog labelling)
+        START_W  = base_level.get("_wfc_start_w", 7)
+        GOAL_W   = base_level.get("_wfc_goal_w",  11)
+        full_w   = START_W + middle_w + GOAL_W
 
         ctx = multiprocessing.get_context("spawn")
 
@@ -1241,18 +1355,20 @@ class MM2Viewer(tk.Tk):
         wfc_process = ctx.Process(
             target=global_ascii_wfc_worker,
             args=(training_strings, result_queue,
-                  int(gen_width), int(gen_height), pat_w,
+                  int(middle_w), int(gen_height), pat_w,
                   self._wfc_pause_event, self._wfc_cancel_event,
-                  attempts, bt, loc_h, choice_h),
+                  attempts, bt, loc_h, choice_h,
+                  None),   # fixed_grid not used — stitching done post-WFC
         )
         wfc_process.start()
 
         WFC_TIMEOUT = 5000.0
         start_time  = time.monotonic()
 
-        # Progress dialog — now includes Pause/Resume button
+        # Progress dialog shows the full level width so the preview canvas
+        # is the right size; partial renders will stitch the zones on too.
         dlg = _WFCProgressDialog(
-            self, gen_width, gen_height,
+            self, full_w, gen_height,
             on_cancel=lambda: self._cancel_wfc(wfc_process, result_queue),
             on_pause=self._toggle_wfc_pause,
         )
@@ -1355,7 +1471,9 @@ class MM2Viewer(tk.Tk):
                 dlg.set_progress(99)
                 self.update_idletasks()
 
-                generated_level = self._decode_wfc_result(payload, base_level)
+                # Stitch the hardcoded start/goal zones onto the WFC middle
+                stitched = self._stitch_zones(payload)
+                generated_level = self._decode_wfc_result(stitched, base_level)
                 self.levels      = [generated_level]
                 self.current_idx = 0
 
@@ -1384,7 +1502,7 @@ class MM2Viewer(tk.Tk):
             pct = round(step / max(total, 1) * 100, 1)
             dlg.set_status(f"\u23f8  Paused at {step}/{total} cells ({pct}%)")
             dlg.set_paused(True)
-            self._render_wfc_partial(partial_rows, base_level)
+            self._render_wfc_partial(self._stitch_zones(partial_rows), base_level)
 
         elif last_progress is not None:
             _, step, total, partial_rows = last_progress
@@ -1394,7 +1512,7 @@ class MM2Viewer(tk.Tk):
                 f"Collapsing\u2026  {step}/{total} cells  ({pct}%)  "
                 f"[{elapsed:.0f}s elapsed]"
             )
-            self._render_wfc_partial(partial_rows, base_level)
+            self._render_wfc_partial(self._stitch_zones(partial_rows), base_level)
 
         # Check for timeout
         if elapsed >= timeout:
@@ -1413,11 +1531,33 @@ class MM2Viewer(tk.Tk):
                    wfc_process, result_queue, base_level,
                    dlg, start_time, timeout)
 
+    def _stitch_zones(self, middle_rows):
+        """
+        Prepend the start zone and append the goal zone to each row of
+        middle_rows (the raw WFC output covering only the free middle section).
+
+        Returns a new list of full-width row strings.
+        """
+        start_rows = getattr(self, "_wfc_zone_start_rows", None)
+        goal_rows  = getattr(self, "_wfc_zone_goal_rows",  None)
+        if start_rows is None or goal_rows is None:
+            return middle_rows   # zones not set — passthrough (ASCII load path)
+
+        out_h = len(middle_rows)
+        full_rows = []
+        for r, mid in enumerate(middle_rows):
+            s = start_rows[r] if r < len(start_rows) else ""
+            g = goal_rows[r]  if r < len(goal_rows)  else ""
+            full_rows.append(s + mid + g)
+        return full_rows
+
     def _render_wfc_partial(self, partial_rows, base_level):
         """
-        Render a partial WFC state onto the main canvas so the user can watch
-        the algorithm collapse in real time.  Uncollapsed cells ('?') are drawn
-        in dim purple to distinguish them from final tiles.
+        Render a partial WFC state onto the main canvas.  partial_rows are
+        already stitched (full width: start zone + middle + goal zone).
+
+        Start zone columns are tinted green, goal zone red, uncollapsed cells
+        ('?') dim purple, ground brown, air dark.
         """
         if not partial_rows:
             return
@@ -1427,12 +1567,18 @@ class MM2Viewer(tk.Tk):
         if out_w == 0:
             return
 
+        START_W   = getattr(self, "_wfc_zone_start_rows", [""])[0]
+        START_W   = len(START_W) if START_W else 7
+        GOAL_W    = getattr(self, "_wfc_zone_goal_rows",  [""])[0]
+        GOAL_W    = len(GOAL_W) if GOAL_W else 11
+        goal_base = out_w - GOAL_W
+        start_end = START_W   # first col after start zone
+
         ts   = self.tile_size
         W    = out_w * ts
         H    = out_h * ts
         self.canvas.delete("all")
         self.canvas.config(scrollregion=(0, 0, W, H))
-        # Dark background for in-progress view
         self.canvas.create_rectangle(0, 0, W, H, fill="#111122", outline="")
 
         show_lbl = self.show_labels.get() and ts >= 14
@@ -1441,14 +1587,22 @@ class MM2Viewer(tk.Tk):
         for row_canvas, row_str in enumerate(partial_rows):
             for col, ch in enumerate(row_str):
                 x0, y0 = col * ts, row_canvas * ts
-                if ch == "?":
-                    bg, fg = "#2A1A3E", "#7755AA"   # uncollapsed — dim purple
-                elif ch == "#":
-                    bg, fg = "#8B6914", "#EDD090"   # ground
-                elif ch == ".":
-                    bg, fg = "#111122", "#333355"   # empty air
-                else:
-                    bg, fg = "#1A2A3E", "#88BBFF"   # any other object
+
+                in_start = col < start_end
+                in_goal  = col >= goal_base
+
+                if in_start:
+                    if ch == "#":   bg, fg = "#1A5C1A", "#66EE66"
+                    elif ch == "S": bg, fg = "#00AA00", "#FFFFFF"
+                    else:           bg, fg = "#0D3D0D", "#44BB44"
+                elif in_goal:
+                    if ch == "#":   bg, fg = "#5C1A1A", "#EE6666"
+                    elif ch == "G": bg, fg = "#CC2200", "#FFFFFF"
+                    else:           bg, fg = "#3D0D0D", "#BB4444"
+                elif ch == "?":     bg, fg = "#2A1A3E", "#7755AA"
+                elif ch == "#":     bg, fg = "#8B6914", "#EDD090"
+                elif ch == ".":     bg, fg = "#111122", "#333355"
+                else:               bg, fg = "#1A2A3E", "#88BBFF"
 
                 self.canvas.create_rectangle(x0, y0, x0 + ts, y0 + ts,
                                              fill=bg, outline="")
