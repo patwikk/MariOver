@@ -1181,25 +1181,26 @@ class MM2Viewer(tk.Tk):
 
         current_level_dict["boundary_right"] = actual_w * 16
 
-        # Overwrite any stale metadata from the source level so the status bar,
-        # title, and counters all reflect the newly-generated level accurately.
-        n_ground  = len(current_level_dict["ground"])
-        n_objects = len(current_level_dict["objects"])
-        current_level_dict["name"] = (
-            f"WFC Generated  ({actual_w}\u00d7{actual_h})"
-        )
-        # Keep gamestyle/theme from the training level (they affect rendering),
-        # but clear raw goal coords so the renderer computes them from scratch.
-        current_level_dict.pop("goal_x_raw", None)
-        current_level_dict.pop("goal_y_raw", None)
-        current_level_dict["goal_x_raw"] = 0
-        current_level_dict["goal_y_raw"] = 0
-        # Subworld data is irrelevant for a freshly generated level
-        current_level_dict["subworld_objects"] = []
-        current_level_dict["subworld_ground"]  = []
+        # For WFC-generated levels: overwrite stale source metadata.
+        # For ASCII loads (skip_spawn_passes=True): all metadata was already
+        # set correctly from the file scan — don't touch it.
+        if not skip_spawn_passes:
+            n_ground  = len(current_level_dict["ground"])
+            n_objects = len(current_level_dict["objects"])
+            current_level_dict["name"] = (
+                f"WFC Generated  ({actual_w}\u00d7{actual_h})"
+            )
+            # Clear raw goal coords so the renderer computes them from scratch.
+            current_level_dict.pop("goal_x_raw", None)
+            current_level_dict.pop("goal_y_raw", None)
+            current_level_dict["goal_x_raw"] = 0
+            current_level_dict["goal_y_raw"] = 0
+            # Subworld data is irrelevant for a freshly generated level
+            current_level_dict["subworld_objects"] = []
+            current_level_dict["subworld_ground"]  = []
+            print(f"[Decode] Final level: '{current_level_dict['name']}'  "
+                  f"{n_ground} ground tiles  {n_objects} objects")
 
-        print(f"[Decode] Final level: '{current_level_dict['name']}'  "
-              f"{n_ground} ground tiles  {n_objects} objects")
         return current_level_dict
 
     def _launch_wfc_async(self, base_level):
@@ -1246,7 +1247,7 @@ class MM2Viewer(tk.Tk):
         )
         wfc_process.start()
 
-        WFC_TIMEOUT = 500000.0
+        WFC_TIMEOUT = 5000.0
         start_time  = time.monotonic()
 
         # Progress dialog — now includes Pause/Resume button
