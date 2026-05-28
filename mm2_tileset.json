@@ -28,7 +28,7 @@
         "W" : ["solid", "warp box", "warp"],
         "k" : ["passable", "collectable", "key"],
         "f" : ["passable", "checkpoint flag"],
-        "G" : ["passable", "goal", "flagpole"],
+        // "G" : ["passable", "goal", "flagpole"], single occurence
         "c" : ["passable", "clear pipe", "warp"],
 
         "g" : ["enemy", "damaging", "hazard", "moving"],
@@ -46,7 +46,7 @@
         "y" : ["enemy", "damaging", "hazard", "moving", "flying"],
         "<" : ["enemy", "damaging", "hazard", "moving"],
         "u" : ["enemy", "damaging", "hazard", "moving"],
-        "X" : ["enemy", "damaging", "hazard", "moving", "boss"],
+        // "X" : ["enemy", "damaging", "hazard", "moving", "boss"], single occurence
         "x" : ["enemy", "damaging", "hazard", "moving", "boss"],
         "@" : ["enemy", "damaging", "hazard"],
         "~" : ["enemy", "damaging", "hazard", "moving"],
