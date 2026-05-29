@@ -3,9 +3,10 @@ import argparse
 from pathlib import Path
 
 MM2_TILESET = 'mm2_tileset.json'
-MM2_HEIGHT = 27
-MM2_WIDTH = 16 ## 240 is full size, 16 used for sampling purposes
+MM2_HEIGHT = 20 # full mm2 levels are 240x27
+MM2_WIDTH = 20
 MM2_EXTRA_TILE = '_'  # not a valid MM2 ASCII tile; used for void/padding
+MM2_DEFAULT_TILE = ' '  # space is the default "empty air" tile in MM2 ASCII
 
 """
 Loads a tileset JSON file (which defines what each tile character means).

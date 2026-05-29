@@ -12,22 +12,21 @@ import torch
 
 
 
-def create_dataloaders(json_path, val_json, tokenizer, data_mode, augment, num_tiles, 
-                       negative_prompt_training, block_embeddings, batch_size):
+def create_dataloaders(json_path, val_json, augment, num_tiles, block_embeddings, batch_size,
+                       tokenizer=None, data_mode="diff", negative_prompt_training=False):
     """
     Create PyTorch dataloaders for training and validation datasets.
 
     Args:
         json_path (str): Path to the training dataset JSON file.
         val_json (str or None): Path to the validation dataset JSON file, or None to skip validation.
-        tokenizer: Tokenizer to use for processing captions.
-        mode (str): "text" for just the text captions, 
-                    "diff_text" for level scenes and text captions (used with a pretrained model).
         augment (bool): Whether to apply data augmentation to the training dataset.
-        num_tiles (int): Number of tiles to use in the level representation (for "diff_text" mode).
-        negative_prompt_training (bool): Whether to include negative captions for training.
-        block_embeddings (torch.Tensor or None): Precomputed block embeddings for "diff_text" mode, or None if not using.
+        num_tiles (int): Number of tiles to use in the level representation.
+        block_embeddings (torch.Tensor or None): Precomputed block embeddings, or None for one-hot.
         batch_size (int): Batch size for the dataloaders.
+        tokenizer: Tokenizer for caption-based modes (unused in "diff" mode).
+        data_mode (str): Dataset mode — "diff" for unconditional (scene only), "diff_text" for captioned.
+        negative_prompt_training (bool): Whether to include negative captions (caption modes only).
     """
 
     # Initialize dataset
@@ -191,7 +190,8 @@ def get_scene_from_embeddings(image, block_embeddings):
     
     
     # Reshape back to [batch_size, height, width]
-    indices = indices.reshape(batch_size, height, width, 13)
+    num_embeddings = block_embeddings.shape[0]
+    indices = indices.reshape(batch_size, height, width, num_embeddings)
     indices = indices.permute(0, 3, 1, 2)
 
     image=indices.detach().cpu()

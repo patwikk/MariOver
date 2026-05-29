@@ -18,7 +18,7 @@ import re
 from models.pipeline_loader import get_pipeline
 from models.latent_diffusion_pipeline import UnconditionalDDPMPipeline
 
-MM2_TILESET = 'mm2_tileset.json'
+MM2_TILESET = 'mm2_tileset_full.json'
 MM2_NUM_INFERENCE_STEPS = 50
 
 
@@ -503,7 +503,7 @@ def main():
                     output_type="tensor",
                     show_progress_bar=False,
                 ).images
-            visualize_samples(samples, os.path.join(args.output_dir, f"samples_epoch_{epoch}"))
+            visualize_samples(samples, os.path.join(args.output_dir, f"samples_epoch_{epoch}"), use_tiles=False)
 
         if epoch % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
             checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{epoch}")
