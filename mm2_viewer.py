@@ -1,4 +1,3 @@
-
 """
 MM2 Level Viewer
 ================
@@ -1021,9 +1020,19 @@ class MM2Viewer(tk.Tk):
                 if 0 <= col < self.MAX_COLS and 0 <= row < self.MAX_ROWS:
                     grid_matrix[row][col] = obj_id_to_str(o["id"])
             
-            # 3. Inject special structure overlay markers back into the grid layout
-            # Parse start_y marker position
+            # 3. Fill start ground zone — cols 0-6, rows 0..(start_y-1) — same
+            #    logic as _build_ascii_grid lines 949-951.  Without this the 7-tile
+            #    wide platform Mario spawns on is missing from the exported file.
             start_y = lvl.get("start_y", 1)
+            for sg_col in range(7):
+                for sg_row in range(0, start_y):
+                    tile_row = (self.MAX_ROWS - 1) - sg_row
+                    if 0 <= sg_col < self.MAX_COLS and 0 <= tile_row < self.MAX_ROWS:
+                        if grid_matrix[tile_row][sg_col] == " ":
+                            grid_matrix[tile_row][sg_col] = "ground"
+
+            # 4. Inject special structure overlay markers back into the grid layout
+            # Parse start_y marker position
             spawn_row = (self.MAX_ROWS - 1) - start_y
             if 0 <= spawn_row < self.MAX_ROWS:
                 grid_matrix[spawn_row][0] = "SPAWN_MARKER"
@@ -1038,7 +1047,7 @@ class MM2Viewer(tk.Tk):
             if 0 <= goal_col < self.MAX_COLS and 0 <= goal_row < self.MAX_ROWS:
                 grid_matrix[goal_row][goal_col] = "CASTLE_MARKER" if is_castle else "GOAL_MARKER"
 
-            # 4. Generate final file layout lines
+            # 5. Generate final file layout lines
             rows = []
             for r in range(self.MAX_ROWS):
                 row_chars = []
@@ -1410,18 +1419,52 @@ class _DatasetDialog(tk.Toplevel):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     app = MM2Viewer()
- 
+
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
-        try:
-            with open(sys.argv[1]) as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                data = [data]
-            app.levels = data
-            app.current_idx = 0
-            app.after(100, app._redraw)
-        except Exception as e:
-            print(f"Could not load {sys.argv[1]}: {e}")
- 
+        input_path  = sys.argv[1]
+        output_path = sys.argv[2] if len(sys.argv) > 2 else None
+
+        if input_path.lower().endswith(".txt"):
+            # ----------------------------------------------------------------
+            # ASCII .txt level -> convert to VGLC, optionally save, then view
+            # ----------------------------------------------------------------
+            try:
+                import importlib.util
+                _conv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mm2view_to_vglc.py")
+                _spec = importlib.util.spec_from_file_location("mm2view_to_vglc", _conv_path)
+                _mod  = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+
+                with open(input_path, encoding="utf-8") as f:
+                    lines = f.readlines()
+
+                vglc_rows = _mod.convert_level(lines)
+                vglc_text = "\n".join(vglc_rows) + "\n"
+
+                if output_path:
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(vglc_text)
+                    print(f"VGLC level saved to: {output_path}")
+                else:
+                    print(vglc_text, end="")
+
+            except Exception as e:
+                print(f"Could not convert {input_path}: {e}")
+
+        else:
+            # ----------------------------------------------------------------
+            # JSON export -> load into viewer as before
+            # ----------------------------------------------------------------
+            try:
+                with open(input_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    data = [data]
+                app.levels = data
+                app.current_idx = 0
+                app.after(100, app._redraw)
+            except Exception as e:
+                print(f"Could not load {input_path}: {e}")
+
     app.protocol("WM_DELETE_WINDOW", lambda: (app.destroy(), sys.exit(0)))
     app.mainloop()
