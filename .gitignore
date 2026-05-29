@@ -7,3 +7,5 @@ webserver_args*.json
 run.sh
 *.db
 *.pem
+/GENERIC_TEST_*
+*.json
