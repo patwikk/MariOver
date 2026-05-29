@@ -9,7 +9,7 @@ Headless end-to-end pipeline:
   2. Convert each level to MM2 ASCII format (same logic as mm2_viewer's
      _build_ascii_grid / Export ASCII, but without any tkinter/GUI).
   3. Convert each ASCII level to VGLC format via mm2view_to_vglc.convert_level.
-  4. Slide a 20×20 window across each VGLC level and emit one sample per
+  4. Slide a 20×20 window across each VGLC level and emit one scene per
      level (the single window with the most non-empty content).
   5. Write everything to a JSON dataset file ready for diffusion model
      training, using integer tile IDs from smb.json (VGLC tileset).
@@ -146,7 +146,7 @@ def build_ascii_grid(lvl: dict, ASCII_MAP: dict, obj_id_to_str) -> list[str]:
     return ["".join(row) for row in grid]
 
 # ---------------------------------------------------------------------------
-# Sample extraction  (one best 20×20 window per level)
+# scene extraction  (one best 20×20 window per level)
 # ---------------------------------------------------------------------------
 WINDOW_H = 20
 WINDOW_W = 20
@@ -174,10 +174,10 @@ def best_window(vglc_rows: list[str], tile_to_id: dict) -> list[list[int]] | Non
     padded   = [r.ljust(width, "-") for r in padded]
 
     best_score  = -1
-    best_sample = None
+    best_scene = None
 
     for x in range(width - WINDOW_W + 1):
-        sample = []
+        scene = []
         score  = 0
         for y in range(WINDOW_H):
             row_slice = padded[y][x : x + WINDOW_W]
@@ -187,12 +187,12 @@ def best_window(vglc_rows: list[str], tile_to_id: dict) -> list[list[int]] | Non
                 id_row.append(tid)
                 if tid not in (empty_id, extra_id):
                     score += 1
-            sample.append(id_row)
+            scene.append(id_row)
         if score > best_score:
             best_score  = score
-            best_sample = sample
+            best_scene = scene
 
-    return best_sample
+    return best_scene
 
 # ---------------------------------------------------------------------------
 # Pipeline
@@ -285,15 +285,15 @@ def run_pipeline(
             Path(vglc_path).write_text("\n".join(vglc_rows), encoding="utf-8")
 
         # 4. Extract best 20×20 window
-        sample = best_window(vglc_rows, tile_to_id)
-        if sample is None:
+        scene = best_window(vglc_rows, tile_to_id)
+        if scene is None:
             print("SKIP (level too narrow for 20×20 window)")
             skipped += 1
             continue
 
         dataset.append({
             "name":   name,
-            "sample": sample,
+            "scene": scene,
         })
         processed += 1
         print("OK")
@@ -301,7 +301,7 @@ def run_pipeline(
     # -- write output -------------------------------------------------------
     output_path = Path("datasets") / output
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"\nWriting {len(dataset)} samples to {output_path}  ({skipped} skipped)")
+    print(f"\nWriting {len(dataset)} scenes to {output_path}  ({skipped} skipped)")
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(dataset, f, indent=2)
     print("Done.")
