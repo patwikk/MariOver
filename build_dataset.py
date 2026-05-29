@@ -55,17 +55,18 @@ def _load_module(name, filename):
     return mod
 
 # ---------------------------------------------------------------------------
-# VGLC tileset  — derived directly from mm2view_to_vglc output constants.
-# These are the only characters mm2view_to_vglc.py can ever emit, so there is
-# no need to load smb.json or any external tileset file.
+# VGLC tileset  (smb.json)
 # ---------------------------------------------------------------------------
-EXTRA_TILE = "_"   # padding / void token (not emitted by converter, used for windowing)
+VGLC_TILESET_PATH = os.path.join(HERE, "smb.json")
+EXTRA_TILE = "_"   # padding / void token
 
-# Sorted so the mapping is stable and deterministic.
-_VGLC_CHARS = sorted(["-", "X", "S", "?", "E", "o", "B", "b", EXTRA_TILE])
-
-def load_vglc_tileset(path=None):   # path argument kept for API compat, unused
-    return {ch: idx for idx, ch in enumerate(_VGLC_CHARS)}
+def load_vglc_tileset(path=VGLC_TILESET_PATH):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    chars = sorted(data["tiles"].keys())
+    if EXTRA_TILE not in chars:
+        chars.append(EXTRA_TILE)
+    return {ch: idx for idx, ch in enumerate(chars)}
 
 # ---------------------------------------------------------------------------
 # ASCII grid builder  (pure replication of mm2_viewer._build_ascii_grid,
