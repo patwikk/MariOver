@@ -19,7 +19,14 @@ python ascii_browser.py
 python build_dataset.py --keyword (keyword) --max_levels (amount of levels to look at) --output (dataset_name).json
 
 **Creating a dataset with captions:**
-python build_dataset.py --keyword (keyword) --max_levels (amount of levels to look at) --output (dataset_name).json --caption --tileset smb.json
+python build_dataset.py --keyword (keyword) --max_levels (amount of levels to look at) --output (dataset_name).json --caption --exclude_upside_down_pipes --seed 0
+
+**Train captioning model:** 
+python train_mlm.py --epochs 300 --save_checkpoints --json datasets\(dataset_name)_captioned.json --val_json datasets\(dataset_name)_captioned-validate.json --test_json datasets\d(dataset_name)_captioned-test.json --pkl datasets\(dataset_name)_Tokenizer-regular.pkl --output_dir dataset-MLM
+
+**Training the (captioned) diffusion model:**
+python train_diffusion.py --augment --text_conditional --output_dir (dataset_name)-conditional --num_epochs 500 --json datasets\(dataset_name)_captioned-train.json --val_json datasets\(dataset_name)_captioned-validate.json --pkl datasets\(dataset_name)_Tokenizer-regular.pkl --mlm_model_dir dataset-MLM --plot_validation_caption_score --seed 0
+
 
 **Running the diffusion model:**
 python run_diffusion.py --model_path (training_folder) --num_samples (number of samples) --output_dir (training_folder)_SAMPLES --save_as_json
