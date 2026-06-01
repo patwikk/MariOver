@@ -13,21 +13,34 @@ Headless end-to-end pipeline:
      level (the single window with the most non-empty content).
   5. Write everything to a JSON dataset file ready for diffusion model
      training, using integer tile IDs from smb.json (VGLC tileset).
+  6. Optionally generate text captions for each scene via create_ascii_captions
+     and write a captioned JSON alongside (or instead of) the plain dataset.
 
 Usage
 -----
     python build_dataset.py --keyword mario --max_levels 100 --output dataset.json
 
+    # Also produce a captioned dataset:
+    python build_dataset.py --keyword mario --max_levels 100 --output dataset.json \
+        --caption --tileset smb.json
+
     # Save intermediate ASCII files too:
     python build_dataset.py --keyword mario --max_levels 50 \
         --output dataset.json --save_ascii ./ascii_levels --save_vglc ./vglc_levels
 
+    # Captioned dataset with optional flags:
+    python build_dataset.py --keyword mario --max_levels 50 --output dataset.json \
+        --caption --describe_absence --exclude_upside_down_pipes
+
 Required files (same directory as this script)
 ---------------
-    level.py          Kaitai-compiled MM2 level parser
-    mm2_viewer.py     Source of level_to_dict and ASCII_MAP
-    mm2view_to_vglc.py    Our ASCII→VGLC converter
-    smb.json          VGLC tileset (defines tile→id mapping)
+    level.py                  Kaitai-compiled MM2 level parser
+    mm2_viewer.py             Source of level_to_dict and ASCII_MAP
+    mm2view_to_vglc.py        Our ASCII→VGLC converter
+    smb.json                  VGLC tileset (defines tile→id mapping)
+    create_ascii_captions.py  Caption generator (required only with --caption)
+    captions/                 Caption utility package (required only with --caption)
+    util/common_settings.py   Shared settings (required only with --caption)
 """
 
 import argparse
@@ -67,6 +80,63 @@ def load_vglc_tileset(path=VGLC_TILESET_PATH):
     if EXTRA_TILE not in chars:
         chars.append(EXTRA_TILE)
     return {ch: idx for idx, ch in enumerate(chars)}
+
+# ---------------------------------------------------------------------------
+# Caption generation  (create_ascii_captions.py)
+# ---------------------------------------------------------------------------
+def generate_captions_inline(
+    dataset:                  list,
+    tileset_path:             str,
+    describe_absence:         bool = False,
+    exclude_upside_down_pipes: bool = False,
+    include_broken:           bool = False,
+) -> list:
+    """
+    Run create_ascii_captions.generate_captions logic directly on an
+    already-built dataset (list of {"name":..., "scene":...} dicts).
+
+    Returns a new list of {"name":..., "scene":..., "caption":...} dicts,
+    excluding any scenes whose caption contains a broken pipe/cannon
+    (unless include_broken=True).
+    """
+    captions_mod = _load_module("create_ascii_captions", "create_ascii_captions.py")
+
+    # extract_tileset returns (tile_chars, id_to_char, char_to_id, tile_descriptors)
+    from captions.util import extract_tileset
+    tile_chars, id_to_char, char_to_id, tile_descriptors = extract_tileset(tileset_path)
+
+    exclude_broken = not include_broken
+    captioned = []
+    num_excluded = 0
+
+    for entry in dataset:
+        scene   = entry["scene"]
+        caption = captions_mod.assign_caption(
+            scene,
+            id_to_char,
+            char_to_id,
+            tile_descriptors,
+            describe_locations=False,
+            describe_absence=describe_absence,
+            exclude_upside_down_pipes=exclude_upside_down_pipes,
+        )
+
+        if exclude_broken and "broken" in caption:
+            if "broken pipe" in caption:
+                print(f"  [caption] broken pipe — excluding: {entry['name']}")
+            if "broken cannon" in caption:
+                print(f"  [caption] broken cannon — excluding: {entry['name']}")
+            num_excluded += 1
+            continue
+
+        captioned.append({
+            "name":    entry["name"],
+            "scene":   scene,
+            "caption": caption,
+        })
+
+    print(f"  [caption] {len(captioned)} captioned, {num_excluded} excluded (broken artifacts).")
+    return captioned
 
 # ---------------------------------------------------------------------------
 # ASCII grid builder  (pure replication of mm2_viewer._build_ascii_grid,
@@ -203,6 +273,11 @@ def run_pipeline(
     output:     str,
     save_ascii: str | None,
     save_vglc:  str | None,
+    caption:    bool = False,
+    tileset:    str | None = None,
+    describe_absence:          bool = False,
+    exclude_upside_down_pipes: bool = False,
+    include_broken:            bool = False,
 ):
     # -- imports that require optional dependencies -------------------------
     try:
@@ -298,12 +373,34 @@ def run_pipeline(
         processed += 1
         print("OK")
 
-    # -- write output -------------------------------------------------------
+    # -- write plain output -------------------------------------------------
     output_path = Path("datasets") / output
     output_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"\nWriting {len(dataset)} scenes to {output_path}  ({skipped} skipped)")
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(dataset, f, indent=2)
+
+    # -- optional: generate captioned dataset -------------------------------
+    if caption:
+        tileset_path = tileset or VGLC_TILESET_PATH
+        if not os.path.isfile(tileset_path):
+            print(f"WARNING: tileset file not found at {tileset_path!r}; skipping caption generation.")
+        else:
+            stem   = output_path.stem
+            suffix = output_path.suffix or ".json"
+            caption_path = output_path.with_name(f"{stem}_captioned{suffix}")
+            print(f"Generating captions → {caption_path}")
+            captioned = generate_captions_inline(
+                dataset,
+                tileset_path=tileset_path,
+                describe_absence=describe_absence,
+                exclude_upside_down_pipes=exclude_upside_down_pipes,
+                include_broken=include_broken,
+            )
+            with open(caption_path, "w", encoding="utf-8") as f:
+                json.dump(captioned, f, indent=2)
+            print(f"Captioned dataset written to {caption_path}")
+
     print("Done.")
 
 # ---------------------------------------------------------------------------
@@ -318,6 +415,31 @@ if __name__ == "__main__":
     parser.add_argument("--output",     required=True, help="Output JSON file path.")
     parser.add_argument("--save_ascii", default=None,  help="Optional: directory to save intermediate MM2 ASCII .txt files.")
     parser.add_argument("--save_vglc",  default=None,  help="Optional: directory to save intermediate VGLC .txt files.")
+
+    # -- captioning ----------------------------------------------------------
+    cap = parser.add_argument_group("captioning (requires create_ascii_captions.py)")
+    cap.add_argument(
+        "--caption", action="store_true", default=False,
+        help="Generate a captioned dataset alongside the plain one "
+             "(written as <output-stem>_captioned.json in the same folder).",
+    )
+    cap.add_argument(
+        "--tileset", default=None,
+        help="Path to the VGLC tileset JSON used for captioning (default: smb.json next to this script).",
+    )
+    cap.add_argument(
+        "--describe_absence", action="store_true", default=False,
+        help="Include phrases like 'no enemies' when a feature is absent.",
+    )
+    cap.add_argument(
+        "--exclude_upside_down_pipes", action="store_true", default=False,
+        help="Omit upside-down pipe mentions from captions.",
+    )
+    cap.add_argument(
+        "--include_broken", action="store_true", default=False,
+        help="Keep scenes whose caption contains broken pipes/cannons (excluded by default).",
+    )
+
     args = parser.parse_args()
 
     run_pipeline(
@@ -326,4 +448,9 @@ if __name__ == "__main__":
         output     = args.output,
         save_ascii = args.save_ascii,
         save_vglc  = args.save_vglc,
+        caption                   = args.caption,
+        tileset                   = args.tileset,
+        describe_absence          = args.describe_absence,
+        exclude_upside_down_pipes = args.exclude_upside_down_pipes,
+        include_broken            = args.include_broken,
     )
