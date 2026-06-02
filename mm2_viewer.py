@@ -303,12 +303,10 @@ ASCII_MAP = {
 # Object tile-size and anchor helpers
 # ---------------------------------------------------------------------------
 # COORDINATE SYSTEM
-#   SMM2 stores x/y as the pixel coordinate of the CENTER of the object's
-#   bounding box (multiples of 160 per tile, so 80 = half-tile offset).
-#   For a w×h object, the bottom-left tile column is:
-#       base_col = (x - (w-1)*80) // 160
-#       base_row = (y - (h-1)*80) // 160
-#   For 1×1 objects this reduces to x//160, matching the original code.
+#   SMM2 stores x/y as the LEFT-EDGE pixel of the object's bounding box,
+#   in units of sub-pixels where 160 sub-pixels = 1 tile.
+#   Tile column = x // 160  (integer floor division — same for all sizes)
+#   Tile row    = y // 160
 #
 # SIZE ENCODING
 #   The binary width/height bytes are the DIRECT tile count (1-based):
@@ -344,6 +342,13 @@ def flag_has_parachute(flag: int) -> bool:
     return bool(flag & 0x4)
 
 
+# Objects that the program messes up if they aren't calculated specially. 
+CENTER_ANCHORED_OBJS = {
+    "thwomp",
+    "lava_lift",
+}
+
+
 # Base sizes for objects that are larger than 1×1 even at normal size.
 # These are the game's own minimum footprints before any flag scaling.
 _BASE_SIZE = {
@@ -354,6 +359,7 @@ _BASE_SIZE = {
     "chain_chomp":         (2, 2),
     "banzai_bill":         (3, 2),
     "fire_bar":            (1, 1),   # length encoded in width field
+    "one_way":             (2, 2),
 }
 
 def obj_tile_size(obj: dict):
@@ -375,7 +381,7 @@ def obj_tile_size(obj: dict):
     W_RESIZABLE = {
         "mushroom_platform", "semisolid_platform", "bridge", "castle_bridge",
         "lift", "lava_lift", "conveyor_belt", "fast_conveyor_belt",
-        "one_way", "fire_bar", "spike_block", "burner",
+        "fire_bar", "spike_block", "burner",
         "bullet_bill_blaster",  # height only but keep in set for clarity
     }
     # Objects whose height byte = tile height (direct count)
@@ -438,12 +444,25 @@ def obj_anchor(obj: dict):
     """
     Return (base_col, base_row) — the bottom-left tile of the object.
 
-    SMM2 stores x/y as the center of the bounding box.
-    Corrects for center offset: base = (center - (size-1)*80) // 160
+    Most objects use standard left-edge floor division.
+    Specific large objects (like Thwomps) are center-anchored in the data,
+    so we calculate their bottom-left by offsetting from the center.
     """
-    w, h = obj_tile_size(obj)
-    base_col = (obj["x"] - (w - 1) * 80) // 160
-    base_row = (obj["y"] - (h - 1) * 80) // 160
+    name_str = obj_id_to_str(obj.get("id", ""))
+    
+    if name_str in CENTER_ANCHORED_OBJS:
+        # Special logic for center-anchored objects
+        w, h = obj_tile_size(obj)
+        pixel_left = obj["x"] - (w * 160 // 2)
+        pixel_bottom = obj["y"] - (h * 160 // 2)
+        
+        base_col = pixel_left // 160
+        base_row = pixel_bottom // 160
+    else:
+        # Default logic for standard objects
+        base_col = obj["x"] // 160
+        base_row = obj["y"] // 160
+        
     return base_col, base_row
 
 
@@ -1549,9 +1568,13 @@ class MM2Viewer(tk.Tk):
         # recompute max_ty the same way _redraw does
         max_ty = 20
         for o in lvl.get("objects", []):
-            max_ty = max(max_ty, o["y"] // self.TILE_PX + 2)
+            _, or_ = obj_anchor(o)
+            _, oh  = obj_tile_size(o)
+            max_ty = max(max_ty, or_ + oh + 1)
         for g in lvl.get("ground", []):
             max_ty = max(max_ty, g["y"] + 2)
+        for t in lvl.get("tracks", []):
+            max_ty = max(max_ty, t["y"] + 2)
         max_ty = min(max_ty, self.MAX_ROWS)
  
         col        = int(cx // ts)
