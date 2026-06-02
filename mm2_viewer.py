@@ -298,6 +298,196 @@ ASCII_MAP = {
 }
  
  
+
+# ---------------------------------------------------------------------------
+# Object tile-size and anchor helpers
+# ---------------------------------------------------------------------------
+# COORDINATE SYSTEM
+#   SMM2 stores x/y as the pixel coordinate of the CENTER of the object's
+#   bounding box (multiples of 160 per tile, so 80 = half-tile offset).
+#   For a w×h object, the bottom-left tile column is:
+#       base_col = (x - (w-1)*80) // 160
+#       base_row = (y - (h-1)*80) // 160
+#   For 1×1 objects this reduces to x//160, matching the original code.
+#
+# SIZE ENCODING
+#   The binary width/height bytes are the DIRECT tile count (1-based):
+#   1 = 1 tile, 2 = 2 tiles, etc.
+#   They are only meaningful for whitelisted resizable objects; all others
+#   are fixed-size (1×1 or hardcoded special cases).
+# ---------------------------------------------------------------------------
+
+_PIPE_DIR = {0: "up", 1: "down", 2: "left", 3: "right"}
+
+def pipe_direction(ex: int) -> str:
+    return _PIPE_DIR.get(ex & 0xFF, "up")
+
+def pipe_is_horizontal(ex: int) -> bool:
+    return (ex & 0xFF) in (2, 3)
+
+_CANNON_DIR = {0: "up", 1: "down", 2: "left", 3: "right", 4: "left-right"}
+def cannon_direction(ex: int) -> str:
+    return _CANNON_DIR.get(ex & 0xFF, "?")
+
+def conveyor_info(ex: int) -> str:
+    d = {0: "right", 1: "left"}.get(ex & 0x0F, "?")
+    return f"{d} spd={(ex >> 4) & 0x0F}"
+
+def flag_is_big(flag: int) -> bool:
+    """True when the object has been mushroom-enlarged (size multiplier = 2)."""
+    return ((flag >> 13) & 0x3) == 2
+
+def flag_has_wings(flag: int) -> bool:
+    return bool(flag & 0x2)
+
+def flag_has_parachute(flag: int) -> bool:
+    return bool(flag & 0x4)
+
+
+# Base sizes for objects that are larger than 1×1 even at normal size.
+# These are the game's own minimum footprints before any flag scaling.
+_BASE_SIZE = {
+    # (w, h)
+    "thwomp":              (2, 2),
+    "bowser":              (3, 3),
+    "bowser_jr":           (2, 2),
+    "chain_chomp":         (2, 2),
+    "banzai_bill":         (3, 2),
+    "fire_bar":            (1, 1),   # length encoded in width field
+}
+
+def obj_tile_size(obj: dict):
+    """
+    Return (w_tiles, h_tiles) for rendering.
+
+    Resizable objects use their binary width/height (direct tile count).
+    Enemies/items use a fixed base size (usually 1×1, larger for big enemies).
+    The large-size flag (mushroom) doubles both dimensions.
+    Pipe width is always hardcoded 2; door is always 1×2.
+    """
+    name_str = obj_id_to_str(obj.get("id", ""))
+    raw_w = obj.get("width",  0)
+    raw_h = obj.get("height", 0)
+    flag  = obj.get("flag",   0)
+    ex    = obj.get("ex",     0)
+
+    # Objects whose width byte = tile width (direct count)
+    W_RESIZABLE = {
+        "mushroom_platform", "semisolid_platform", "bridge", "castle_bridge",
+        "lift", "lava_lift", "conveyor_belt", "fast_conveyor_belt",
+        "one_way", "fire_bar", "spike_block", "burner",
+        "bullet_bill_blaster",  # height only but keep in set for clarity
+    }
+    # Objects whose height byte = tile height (direct count)
+    H_RESIZABLE = {
+        "semisolid_platform",   # rectangle: both w and h
+        "vine",
+        "piranha_flower",
+        "fire_bar",
+        "burner",
+        "bullet_bill_blaster",  # variable height tower
+    }
+
+    if name_str == "pipe":
+        # Always exactly 2 wide; height = raw_h (direct count, min 2)
+        h = max(2, raw_h)
+        w = 2
+        if pipe_is_horizontal(ex):
+            w, h = h, w
+
+    elif name_str == "door":
+        # Always 1×2 regardless of binary values
+        w, h = 1, 2
+
+    elif name_str == "one_way":
+        # Platform itself is raw_w wide × 1 tall, but we draw 2 tall to
+        # include the arrow indicator row above it
+        w = max(1, raw_w)
+        h = 2
+
+    elif name_str == "bullet_bill_blaster":
+        w = 1
+        h = max(1, raw_h)
+
+    elif name_str in W_RESIZABLE and name_str in H_RESIZABLE:
+        w = max(1, raw_w)
+        h = max(1, raw_h)
+
+    elif name_str in W_RESIZABLE:
+        w = max(1, raw_w)
+        h = 1
+
+    elif name_str in H_RESIZABLE:
+        w = 1
+        h = max(1, raw_h)
+
+    else:
+        # Fixed-size: enemies, items, terrain blocks
+        base_w, base_h = _BASE_SIZE.get(name_str, (1, 1))
+        w, h = base_w, base_h
+
+    # Mushroom-enlarged flag doubles both dimensions (applies to all object types)
+    if flag_is_big(flag):
+        w *= 2
+        h *= 2
+
+    return w, h
+
+
+def obj_anchor(obj: dict):
+    """
+    Return (base_col, base_row) — the bottom-left tile of the object.
+
+    SMM2 stores x/y as the center of the bounding box.
+    Corrects for center offset: base = (center - (size-1)*80) // 160
+    """
+    w, h = obj_tile_size(obj)
+    base_col = (obj["x"] - (w - 1) * 80) // 160
+    base_row = (obj["y"] - (h - 1) * 80) // 160
+    return base_col, base_row
+
+
+def obj_tooltip_extra(obj: dict) -> str:
+    """One-line debug summary of size/flag/ex for the hover tooltip."""
+    flag = obj.get("flag", 0)
+    ex   = obj.get("ex",   0)
+    w, h = obj_tile_size(obj)
+    col, row = obj_anchor(obj)
+    parts = [f"size={w}x{h}  anchor=({col},{row})  raw_w={obj.get('width',0)}  raw_h={obj.get('height',0)}"]
+    if flag_has_wings(flag):     parts.append("wings")
+    if flag_has_parachute(flag): parts.append("parachute")
+    if flag_is_big(flag):        parts.append("BIG")
+    name_str = obj_id_to_str(obj.get("id", ""))
+    if name_str == "pipe":
+        parts.append(f"dir={pipe_direction(ex)}")
+    elif name_str in ("cannon", "bullet_bill_blaster"):
+        parts.append(f"fire={cannon_direction(ex)}")
+    elif name_str in ("conveyor_belt", "fast_conveyor_belt"):
+        parts.append(f"conv={conveyor_info(ex)}")
+    if flag or ex:
+        parts.append(f"flag=0x{flag & 0xFFFFFFFF:08X}  ex=0x{ex & 0xFFFFFFFF:08X}")
+    return "  ".join(parts)
+
+
+# Track wire type → Unicode character for ASCII grid
+_TRACK_CHARS = {
+    0: "─",   # horizontal straight
+    1: "│",   # vertical straight
+    2: "╮",   # top-left corner  (enters from top or left)
+    3: "╭",   # top-right corner
+    4: "╯",   # bottom-left corner
+    5: "╰",   # bottom-right corner
+    6: "┼",   # cross / T-junction
+    7: "┼",
+}
+TRACK_CHAR_FALLBACK = "·"
+
+def track_char(track_type: int) -> str:
+    return _TRACK_CHARS.get(track_type, TRACK_CHAR_FALLBACK)
+
+TRACK_COLOR = "#FF8C00"   # orange — visible against sky and ground
+
+
 CAT_COLORS = {
     CAT_TERRAIN:  "#C8A050",
     CAT_ENEMY:    "#CC4444",
@@ -320,16 +510,30 @@ def level_to_dict(level, name: str = "") -> dict:
         objs = []
         for i in range(world.object_count):
             o = world.objects[i]
-            objs.append({"x": int(o.x), "y": int(o.y), "id": str(o.id)})
+            objs.append({
+                "x":      int(o.x),
+                "y":      int(o.y),
+                "id":     str(o.id),
+                "width":  int(o.width),
+                "height": int(o.height),
+                "flag":   int(o.flag),
+                "ex":     int(o.ex),
+            })
         gnd = []
         for i in range(world.ground_count):
             g = world.ground[i]
             gnd.append({"x": int(g.x), "y": int(g.y),
                         "tile_id": int(g.id), "background_id": int(g.background_id)})
-        return objs, gnd
- 
-    ow_objs, ow_gnd = parse_map(level.overworld)
-    sw_objs, sw_gnd = parse_map(level.subworld)
+        # Track wire nodes (separate from objects)
+        trks = []
+        for i in range(world.track_count):
+            t = world.tracks[i]
+            trks.append({"x": int(t.x), "y": int(t.y),
+                         "type": int(t.type), "flags": int(t.flags), "lid": int(t.lid)})
+        return objs, gnd, trks
+
+    ow_objs, ow_gnd, ow_tracks = parse_map(level.overworld)
+    sw_objs, sw_gnd, sw_tracks = parse_map(level.subworld)
     level_name = name or getattr(level, "name", "Unknown")
     if isinstance(level_name, (bytes, bytearray)):
         level_name = level_name.decode("utf-16-le", errors="replace")
@@ -355,7 +559,7 @@ def level_to_dict(level, name: str = "") -> dict:
     print(f"  header: start_y={start_y}  goal_x={goal_x}  goal_y={goal_y}  (goal_x//160={goal_x//160 if goal_x else 0})  (goal_x//10={goal_x//10 if goal_x else 0})")
     print(f"  all objects ({len(ow_objs)}):")
     for o in ow_objs:
-        print(f"    id={o['id']}  x={o['x']}  y={o['y']}  tile_col={o['x']//160}  tile_row={o['y']//160}")
+        print(f"    id={o['id']}  x={o['x']}  y={o['y']}  col={o['x']//160}  row={o['y']//160}  w={o['width']}  h={o['height']}  flag=0x{o['flag']&0xFFFFFFFF:08X}  ex=0x{o['ex']&0xFFFFFFFF:08X}")
     # --- END DEBUG ---
  
     return {
@@ -368,8 +572,10 @@ def level_to_dict(level, name: str = "") -> dict:
         "boundary_right": boundary_right,
         "objects":        ow_objs,
         "ground":         ow_gnd,
+        "tracks":         ow_tracks,
         "subworld_objects": sw_objs,
         "subworld_ground":  sw_gnd,
+        "subworld_tracks":  sw_tracks,
     }
  
 def export_level_json(level, path: str, name: str = ""):
@@ -702,15 +908,20 @@ class MM2Viewer(tk.Tk):
         ts      = self.tile_size
         active  = self._active_cats()
  
-        # compute grid size from actual data
+        # compute grid size from actual data (uses correct center-anchor)
         max_tx = 40
         max_ty = 20
         for o in objects:
-            max_tx = max(max_tx, int(math.ceil(o["x"] / self.TILE_PX)) + 2)
-            max_ty = max(max_ty, o["y"] // self.TILE_PX + 2)
+            oc, or_ = obj_anchor(o)
+            ow, oh  = obj_tile_size(o)
+            max_tx = max(max_tx, oc + ow + 1)
+            max_ty = max(max_ty, or_ + oh + 1)
         for g in ground:
             max_tx = max(max_tx, g["x"] + 2)
             max_ty = max(max_ty, g["y"] + 2)
+        for t in lvl.get("tracks", []):
+            max_tx = max(max_tx, t["x"] + 2)
+            max_ty = max(max_ty, t["y"] + 2)
         br = lvl.get("boundary_right", 0)
         boundary_cols = (br // 16) if br > 0 else 0
         max_tx = min(max_tx, self.MAX_COLS) - 1
@@ -768,28 +979,50 @@ class MM2Viewer(tk.Tk):
                                             text=GROUND_CHAR, fill="#EDD090",
                                             font=("Courier", max(ts // 2, 7), "bold"))
  
-        # objects
+        # objects — semisolids/platforms first (background), then foreground
         if self.show_objects.get():
-            for obj in objects:
-                name_str = obj_id_to_str(obj["id"])
-                char, color, cat = get_meta(name_str)
-                if cat not in active:
-                    continue
-                col      = int(math.ceil(obj["x"] // self.TILE_PX))
-                row_game = obj["y"] // self.TILE_PX
-                if col >= max_tx or row_game >= max_ty:
-                    continue
-                row_canvas = max_ty - 1 - row_game
-                x0, y0 = col * ts, row_canvas * ts
-                pad = max(1, ts // 8)
-                self.canvas.create_rectangle(x0 + pad, y0 + pad,
-                                             x0 + ts - pad, y0 + ts - pad,
-                                             fill=color, outline="#000000")
-                if show_lbl:
-                    self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
-                                            text=char, fill="white",
-                                            font=("Courier", max(ts // 2, 7), "bold"))
- 
+            pad = max(1, ts // 8)
+            BG_TYPES = {"semisolid_platform", "mushroom_platform"}
+            for pass_n in range(2):
+                for obj in objects:
+                    name_str = obj_id_to_str(obj["id"])
+                    is_bg = name_str in BG_TYPES
+                    if pass_n == 0 and not is_bg: continue
+                    if pass_n == 1 and is_bg:     continue
+                    char, color, cat = get_meta(name_str)
+                    if cat not in active:
+                        continue
+                    base_col, base_row = obj_anchor(obj)
+                    ow, oh = obj_tile_size(obj)
+                    if base_col >= max_tx or base_row >= max_ty:
+                        continue
+                    px0 = base_col * ts + pad
+                    py1 = (max_ty - 1 - base_row) * ts + ts - pad
+                    px1 = (base_col + ow) * ts - pad
+                    py0 = (max_ty - 1 - (base_row + oh - 1)) * ts + pad
+                    outline_col = "#888888" if is_bg else "#000000"
+                    self.canvas.create_rectangle(px0, py0, px1, py1,
+                                                 fill=color, outline=outline_col)
+                    if show_lbl:
+                        self.canvas.create_text((px0 + px1) // 2, (py0 + py1) // 2,
+                                                text=char, fill="white",
+                                                font=("Courier", max(ts // 2, 7), "bold"))
+
+        # track wires (drawn after ground, before goal so they show clearly)
+        for t in lvl.get("tracks", []):
+            tc, tr = t["x"], t["y"]
+            if tc >= max_tx or tr >= max_ty:
+                continue
+            rc = max_ty - 1 - tr
+            x0, y0 = tc * ts, rc * ts
+            ch = track_char(t["type"])
+            self.canvas.create_rectangle(x0, y0, x0 + ts, y0 + ts,
+                                         fill=TRACK_COLOR, outline="#AA5500")
+            if show_lbl:
+                self.canvas.create_text(x0 + ts // 2, y0 + ts // 2,
+                                        text=ch, fill="white",
+                                        font=("Courier", max(ts // 2, 7), "bold"))
+
         # ----------------------------------------------------------------
         # START GROUND  —  7 tiles wide, fills from row 0 up to start_y
         # (the game enforces this; no objects can be placed in this zone)
@@ -910,13 +1143,17 @@ class MM2Viewer(tk.Tk):
         max_tx = 40
         max_ty = 20
         for o in objects:
-            max_tx = max(max_tx, o["x"] // 160 + 2)
-            max_ty = max(max_ty, o["y"] // 160 + 2)
+            oc, or_ = obj_anchor(o)
+            ow, oh  = obj_tile_size(o)
+            max_tx = max(max_tx, oc + ow + 1)
+            max_ty = max(max_ty, or_ + oh + 1)
         for g in ground:
             max_tx = max(max_tx, g["x"] + 2)
             max_ty = max(max_ty, g["y"] + 2)
+        for t in lvl.get("tracks", []):
+            max_tx = max(max_tx, t["x"] + 2)
+            max_ty = max(max_ty, t["y"] + 2)
         br = lvl.get("boundary_right", 0)
-        boundary_cols = (br // 16) if br > 0 else 0
         max_tx = min(max_tx, 240) - 1
         max_ty = min(max_ty, 28)
         goal_x_raw = int(lvl.get("goal_x_raw", 0))
@@ -941,10 +1178,23 @@ class MM2Viewer(tk.Tk):
  
         for g in ground:
             set_cell(g["x"], g["y"], "#")
-        for obj in objects:
-            ch = ASCII_MAP.get(obj_id_to_str(obj["id"]), "?")
-            # Replace math.ceil with standard floor division to eliminate the +1 tile offset
-            set_cell(obj["x"] // 160, obj["y"] // 160, ch)
+        # Tracks (under everything else)
+        for t in lvl.get("tracks", []):
+            set_cell(t["x"], t["y"], track_char(t["type"]))
+        # Objects — background platforms first so foreground objects overwrite them
+        BG_TYPES = {"semisolid_platform", "mushroom_platform"}
+        for pass_n in range(2):
+            for obj in objects:
+                name_str = obj_id_to_str(obj["id"])
+                is_bg = name_str in BG_TYPES
+                if pass_n == 0 and not is_bg: continue
+                if pass_n == 1 and is_bg:     continue
+                ch = ASCII_MAP.get(name_str, "?")
+                base_col, base_row = obj_anchor(obj)
+                ow, oh = obj_tile_size(obj)
+                for dc in range(ow):
+                    for dr in range(oh):
+                        set_cell(base_col + dc, base_row + dr, ch)
         for col in range(7):
             for row in range(0, start_ygame):
                 set_cell(col, row, "#")
@@ -1117,11 +1367,16 @@ class MM2Viewer(tk.Tk):
 
         max_tx, max_ty = 40, 20
         for o in objects:
-            max_tx = max(max_tx, int(math.ceil(o["x"] / self.TILE_PX)) + 2)
-            max_ty = max(max_ty, o["y"] // self.TILE_PX + 2)
+            oc, or_ = obj_anchor(o)
+            ow, oh  = obj_tile_size(o)
+            max_tx = max(max_tx, oc + ow + 1)
+            max_ty = max(max_ty, or_ + oh + 1)
         for g in ground:
             max_tx = max(max_tx, g["x"] + 2)
             max_ty = max(max_ty, g["y"] + 2)
+        for t in lvl.get("tracks", []):
+            max_tx = max(max_tx, t["x"] + 2)
+            max_ty = max(max_ty, t["y"] + 2)
         max_tx = min(max_tx, self.MAX_COLS) - 1
         max_ty = min(max_ty, self.MAX_ROWS)
 
@@ -1189,26 +1444,46 @@ class MM2Viewer(tk.Tk):
                           GROUND_COLOR, "#5A3E00",
                           GROUND_CHAR if show_lbl else None, "#EDD090")
 
-        # ---- objects ----------------------------------------------------- #
+        # ---- objects (bg platforms first, then foreground) ------------------- #
         if self.show_objects.get():
             pad = max(1, ts // 8)
-            for obj in objects:
-                name_str        = obj_id_to_str(obj["id"])
-                char, color, cat = get_meta(name_str)
-                if cat not in active:
-                    continue
-                col      = int(math.ceil(obj["x"] // self.TILE_PX))
-                row_game = obj["y"] // self.TILE_PX
-                if col >= max_tx or row_game >= max_ty:
-                    continue
-                rc = max_ty - 1 - row_game
-                x0, y0 = col * ts + pad, rc * ts + pad
-                x1, y1 = col * ts + ts - pad - 1, rc * ts + ts - pad - 1
-                draw.rectangle([x0, y0, x1, y1],
-                               fill=hex_to_rgb(color), outline=(0, 0, 0))
-                if show_lbl:
-                    draw.text((col * ts + ts // 2, rc * ts + ts // 2), char,
-                              fill=(255, 255, 255), font=font, anchor="mm")
+            BG_TYPES = {"semisolid_platform", "mushroom_platform"}
+            for pass_n in range(2):
+                for obj in objects:
+                    name_str = obj_id_to_str(obj["id"])
+                    is_bg = name_str in BG_TYPES
+                    if pass_n == 0 and not is_bg: continue
+                    if pass_n == 1 and is_bg:     continue
+                    char, color, cat = get_meta(name_str)
+                    if cat not in active:
+                        continue
+                    base_col, base_row = obj_anchor(obj)
+                    ow, oh = obj_tile_size(obj)
+                    if base_col >= max_tx or base_row >= max_ty:
+                        continue
+                    px0 = base_col * ts + pad
+                    py1 = (max_ty - 1 - base_row) * ts + ts - pad - 1
+                    px1 = (base_col + ow) * ts - pad - 1
+                    py0 = (max_ty - 1 - (base_row + oh - 1)) * ts + pad
+                    outline_rgb = (136,136,136) if is_bg else (0,0,0)
+                    draw.rectangle([px0, py0, px1, py1],
+                                   fill=hex_to_rgb(color), outline=outline_rgb)
+                    if show_lbl:
+                        draw.text(((px0+px1)//2, (py0+py1)//2), char,
+                                  fill=(255,255,255), font=font, anchor="mm")
+
+        # ---- track wires ----------------------------------------------------- #
+        for t in lvl.get("tracks", []):
+            tc, tr = t["x"], t["y"]
+            if tc >= max_tx or tr >= max_ty:
+                continue
+            rc = max_ty - 1 - tr
+            x0p, y0p = tc * ts, rc * ts
+            draw.rectangle([x0p, y0p, x0p+ts-1, y0p+ts-1],
+                            fill=hex_to_rgb(TRACK_COLOR), outline=hex_to_rgb("#AA5500"))
+            if show_lbl:
+                draw.text((x0p+ts//2, y0p+ts//2), track_char(t["type"]),
+                          fill=(255,255,255), font=font, anchor="mm")
 
         # ---- start zone -------------------------------------------------- #
         START_W     = 7
@@ -1291,13 +1566,18 @@ class MM2Viewer(tk.Tk):
         # spawn marker row
         if col == 3 and row_game == start_ygame_tip + 1:
             hits.append(f"SPAWN  tile({col},{row_game})")
-        # goal objects
+        # objects — hit-test against full multi-tile footprint
         for o in lvl.get("objects", []):
             id_str = obj_id_to_str(o["id"])
-            obj_col = int(math.ceil(o["x"] / self.TILE_PX))
-            if obj_col == col and o["y"] // self.TILE_PX == row_game:
+            base_col, base_row = obj_anchor(o)
+            ow, oh = obj_tile_size(o)
+            if base_col <= col < base_col + ow and base_row <= row_game < base_row + oh:
                 prefix = "GOAL " if id_str in ("goal", "goal_ground") else "obj"
-                hits.append(f"{prefix}: {id_str}  px({o['x']},{o['y']})")
+                extra  = obj_tooltip_extra(o)
+                hits.append(f"{prefix}: {id_str}  {extra}")
+        for t in lvl.get("tracks", []):
+            if t["x"] == col and t["y"] == row_game:
+                hits.append(f"track  type={t['type']}  flags=0x{t['flags']:02X}  lid={t['lid']}  @({col},{row_game})")
         for g in lvl.get("ground", []):
             if g["x"] == col and g["y"] == row_game:
                 hits.append(f"ground  tile={g.get('tile_id','?')}  bg={g.get('background_id','?')}  @({col},{row_game})")
