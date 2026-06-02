@@ -28,5 +28,9 @@ python train_mlm.py --epochs 300 --save_checkpoints --json datasets\(dataset_nam
 python train_diffusion.py --augment --text_conditional --output_dir (dataset_name)-conditional --num_epochs 500 --json datasets\(dataset_name)_captioned-train.json --val_json datasets\(dataset_name)_captioned-validate.json --pkl datasets\(dataset_name)_Tokenizer-regular.pkl --mlm_model_dir dataset-MLM --plot_validation_caption_score --seed 0
 
 
-**Running the diffusion model:**
+**Running the unconditional diffusion model:**
 python run_diffusion.py --model_path (training_folder) --num_samples (number of samples) --output_dir (training_folder)_SAMPLES --save_as_json
+
+**Running captioned diffusion with GUI:**
+python interactive_tile_level_generator.py --model_path (generated_dataset) --load_data datasets/Mar1and2_LevelsAndCaptions-regular.json
+
