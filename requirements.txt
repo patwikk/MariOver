@@ -34,6 +34,7 @@ hilbertcurve>=2
 imageio
 matplotlib
 scipy
+pycryptodome
 
 # Testing
 pytest
