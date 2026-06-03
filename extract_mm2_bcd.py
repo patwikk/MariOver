@@ -207,6 +207,8 @@ def extract_levels(
     limit=None,
     streaming: bool = True,
     data_id_filter=None,
+    name_filter=None,
+    name_count=None,
 ):
     from datasets import load_dataset
 
@@ -217,10 +219,18 @@ def extract_levels(
     ds = load_dataset("TheGreatRambler/mm2_level", streaming=streaming, split="train")
 
     saved = skipped = errors = 0
+    name_saved = 0
 
     for row in ds:
         data_id = row["data_id"]
+
         if data_id_filter is not None and data_id not in data_id_filter:
+            continue
+        
+        if name_filter is not None:
+            level_name = str(row.get("name", ""))
+
+        if name_filter.lower() not in level_name.lower():
             continue
 
         raw = row["level_data"]
@@ -247,8 +257,18 @@ def extract_levels(
             errors += 1
             continue
 
-        (out / f"{data_id}.bcd").write_bytes(bcd)
+        if name_filter is not None:
+            name_saved += 1
+            filename = f"{data_id}_{name_saved}.bcd"
+        else:
+            filename = f"{data_id}.bcd"
+
+        (out / filename).write_bytes(bcd)
         saved += 1
+
+        if name_filter is not None and name_count is not None:
+            if name_saved >= name_count:
+                break
 
         if saved % 500 == 0 or saved == 1:
             print(f"  Saved {saved} levels …  (last: {data_id}.bcd)")
@@ -280,8 +300,11 @@ def parse_args():
                    help="Download full dataset first (~100 GB)")
     p.add_argument("--ids", nargs="+", type=int, default=None,
                    metavar="DATA_ID", help="Only extract these data_ids")
+    p.add_argument("--name", type=str, default=None, help="Extract levels whose name contains this text")
+    p.add_argument("--name_count", type=int, default=None, help="Number of matching levels to extract")
     return p.parse_args()
 
+# python extract_mm2_bcd.py --name "mario" --name_count 25
 
 if __name__ == "__main__":
     args = parse_args()
@@ -290,4 +313,6 @@ if __name__ == "__main__":
         limit=args.limit,
         streaming=not args.no_stream,
         data_id_filter=set(args.ids) if args.ids else None,
-    )
+        name_filter=args.name,
+        name_count=args.name_count,
+    )   
