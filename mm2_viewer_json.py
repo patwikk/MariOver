@@ -318,28 +318,17 @@ class MM2Viewer(tk.Tk):
 
         objects = lvl.get("objects", [])
 
-        # 1. Ground comes from drawing_instructions (is_tile=True entries).
-        #    The 'ground' array in this dataset has all x=0,y=0 and is not usable.
-        #    drawing_instructions use 16px-per-tile canvas coords (y=0 at top).
-        #    top_boundary is the canvas height in pixels (e.g. 432 = 27 tiles * 16px).
-        top_boundary = lvl.get("top_boundary", 432)
-        max_canvas_row = (top_boundary // 16) - 1   # e.g. 26 for a 27-row level
-
-        for di in lvl.get("drawing_instructions", []):
-            if not di.get("is_tile"):
-                continue
-            canvas_col = di["x"] // 16
-            canvas_row = di["y"] // 16
-            game_row   = max_canvas_row - canvas_row   # flip y: canvas top → game bottom
+        # 1. First, parse the explicit terrain blocks from the clean 'ground' array
+        for g in lvl.get("ground", []):
             objects.append({
                 "name": "Ground",
-                "x":    canvas_col * 160,   # convert tile col → sub-pixels
-                "y":    game_row   * 160,   # convert tile row → sub-pixels
+                "x":    g["x"] * 160,   # tile col → sub-pixels
+                "y":    g["y"] * 160,   # tile row → sub-pixels (y=0 at bottom)
                 "w":    1,
                 "h":    1,
             })
 
-        # 2. Start block: start_y is in tile rows.
+        # 2. Add the Start block structure
         start_y = lvl.get("start_y", 0)
         objects.append({
             "name": "Starting Brick",
@@ -349,17 +338,42 @@ class MM2Viewer(tk.Tk):
             "h": 1,
         })
 
-        # 3. Goal: goal_x is in units of 16 sub-pixels (i.e. 1 drawing-instruction pixel),
-        #          so tile col = goal_x // 10.  goal_y is in tile rows.
+        # Add 4 vertical columns (strips) of ground at the start (cols 0, 1, 2, 3)
+        # filled from row 0 up to start_y
+        for col in range(0, 7):
+            for row in range(0, start_y):
+                objects.append({
+                    "name": "Ground",
+                    "x":    col * 160,
+                    "y":    row * 160,
+                    "w":    1,
+                    "h":    1,
+                })
+
+        # 3. Add the Goal flagpole structure
         goal_x = lvl.get("goal_x", 0)
         goal_y = lvl.get("goal_y", 0)
+        goal_col = goal_x // 10
+        
         objects.append({
             "name": "Goal",
-            "x": (goal_x // 10) * 160,
+            "x": goal_col * 160,
             "y": goal_y * 160,
             "w": 1,
             "h": 5,
         })
+
+        # Add 9 vertical columns (strips) of ground extending rightward from the goal position
+        # filled from row 0 up to goal_y
+        for col in range(goal_col, goal_col + 13):
+            for row in range(0, goal_y):
+                objects.append({
+                    "name": "Ground",
+                    "x":    col * 160,
+                    "y":    row * 160,
+                    "w":    1,
+                    "h":    1,
+                })
 
         lvl["objects"] = objects
 
