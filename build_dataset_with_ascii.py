@@ -124,9 +124,20 @@ def parse_source_file(file_path):
 
     return levels
 
+def collect_input_files(input_path):
+    p = Path(input_path)
+    if p.is_dir():
+        files = sorted(p.glob("*.txt"))
+        if not files:
+            sys.exit(f"ERROR: No .txt files found in folder {input_path}")
+        return files
+    if p.is_file():
+        return [p]
+    sys.exit(f"ERROR: Input path not found: {input_path}")
+
 def main():
     parser = argparse.ArgumentParser(description="Build dataset from custom tagged text files.")
-    parser.add_argument("--input_file", required=True, help="Path to the custom text file (e.g., d.txt).")
+    parser.add_argument("--input_file", required=True, help="Path to a .txt file or a folder of .txt files.")
     parser.add_argument("--output", required=True, help="Output JSON filename.")
     parser.add_argument("--convert_to_vglc", action="store_true", help="Convert layout to VGLC structure.")
     parser.add_argument("--tileset", default=os.path.join(HERE, "smb.json"), help="Path to smb.json tileset.")
@@ -136,7 +147,6 @@ def main():
 
     if args.convert_to_vglc:
         import importlib.util
-        # FILENAME FIXED PERMANENTLY: Points exactly to ascii_to_vglc.py
         vglc_filename = "ascii_to_vglc.py"
         vglc_path = os.path.join(HERE, vglc_filename)
         if not os.path.isfile(vglc_path):
@@ -145,41 +155,41 @@ def main():
         vglc_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(vglc_mod)
 
-    # Extract clean blocks from the source file
-    raw_levels = parse_source_file(args.input_file)
-    
+    input_files = collect_input_files(args.input_file)
     dataset = []
     processed = 0
     skipped = 0
 
-    print(f"Parsing content from {args.input_file}...")
+    for input_file in input_files:
+        raw_levels = parse_source_file(input_file)
+        file_stem = input_file.stem
+        print(f"Parsing content from {input_file}...")
 
-    for name, rows in raw_levels.items():
-        try:
-            # Convert to VGLC structure if requested
-            if args.convert_to_vglc:
-                rows = vglc_mod.convert_level(rows)
-            else:
-                # Fallback trailing-strip if using manual layouts
-                rows = [r.rstrip('\r\n') for r in rows]
+        for name, rows in raw_levels.items():
+            # Prefix with the source filename so names stay unique across files
+            full_name = f"{file_stem}/{name}" if len(input_files) > 1 else name
+            try:
+                if args.convert_to_vglc:
+                    rows = vglc_mod.convert_level(rows)
+                else:
+                    rows = [r.rstrip('\r\n') for r in rows]
 
-            # Slide window and extract token grid
-            scene = extract_best_window(rows, tile_to_id)
-            if scene is None:
-                print(f"  [SKIP] {name} (too narrow or empty)")
+                scene = extract_best_window(rows, tile_to_id)
+                if scene is None:
+                    print(f"  [SKIP] {full_name} (too narrow or empty)")
+                    skipped += 1
+                    continue
+
+                dataset.append({
+                    "name": full_name,
+                    "scene": scene
+                })
+                processed += 1
+                print(f"  [OK] {full_name}")
+
+            except Exception as e:
+                print(f"  [ERROR] Failed processing {full_name}: {e}")
                 skipped += 1
-                continue
-
-            dataset.append({
-                "name": name,
-                "scene": scene
-            })
-            processed += 1
-            print(f"  [OK] {name}")
-
-        except Exception as e:
-            print(f"  [ERROR] Failed processing {name}: {e}")
-            skipped += 1
 
     # Save output dataset
     output_file = Path(args.output)
