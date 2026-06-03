@@ -9,4 +9,6 @@ run.sh
 *.pem
 /GENERIC_TEST_*
 *.json
-datasets/*.pkl
+/datasets/*
+/bcd_levels/*
+/img/*
