@@ -22,10 +22,16 @@ Output characters
     M   mushroom platform
     B   cannon top
     b   cannon bottom
-    <   pipe top-left
-    >   pipe top-right
-    [   pipe body-left
-    ]   pipe body-right
+
+    Upright pipe (↑ / |):
+    <   pipe top-left        >   pipe top-right
+    [   pipe body-left       ]   pipe body-right
+
+    Upside-down pipe (↓, ceiling-mounted):
+    (   pipe cap-left        )   pipe cap-right
+    {   pipe body-left       }   pipe body-right
+
+    Sideways pipes (← / →) are treated as solid ground (X).
 
 Usage:
     python mm2view_to_extended.py input_level.txt [output_level.txt]
@@ -66,7 +72,10 @@ MM2_GROUND = {
 MM2_BREAKABLE      = {"B"}           # breakable brick → S
 MM2_QUESTION       = {"?"}           # question block → ?
 MM2_COINS          = {"¢", "$", "£"} # coin, red coin, big coin → o
-MM2_PIPE           = {"|"}           # pipe → classify_pipe_cell
+MM2_PIPE_UPRIGHT   = {"|", "↑"}      # standard pipe (mouth up)   → <>[]]
+MM2_PIPE_DOWN      = {"↓"}           # ceiling pipe (mouth down)  → (){}
+MM2_PIPE_SIDEWAYS  = {"←", "→"}     # sideways pipe              → X (ground)
+MM2_PIPE           = MM2_PIPE_UPRIGHT | MM2_PIPE_DOWN | MM2_PIPE_SIDEWAYS
 MM2_WARP_AS_GROUND = {"D", "W"}      # door / warp box → X
 
 MM2_CANNON         = {"V"}           # bullet bill blaster → B / b
@@ -100,10 +109,14 @@ OUT_MUSHROOM = "M"
 OUT_BREAK_NB = "N"
 OUT_CANNON_T = "B"
 OUT_CANNON_B = "b"
-PIPE_TOP_L   = "<"
+PIPE_TOP_L   = "<"   # upright pipe cap
 PIPE_TOP_R   = ">"
-PIPE_BOT_L   = "["
+PIPE_BOT_L   = "["   # upright pipe body
 PIPE_BOT_R   = "]"
+PIPE_CAP_L   = "("   # upside-down pipe cap (mouth at bottom)
+PIPE_CAP_R   = ")"
+PIPE_UDB_L   = "{"   # upside-down pipe body
+PIPE_UDB_R   = "}"
 
 # ---------------------------------------------------------------------------
 
@@ -130,20 +143,35 @@ def is_pipe_tile(ch: str) -> bool:
 
 
 def classify_pipe_cell(grid: list[list[str]], row: int, col: int) -> str:
+    ch     = grid[row][col]
     height = len(grid)
     width  = len(grid[0]) if height > 0 else 0
 
-    above = grid[row - 1][col] if row > 0       else " "
-    right = grid[row][col + 1] if col + 1 < width else " "
-    left  = grid[row][col - 1] if col - 1 >= 0   else " "
+    # Sideways pipes: just solid ground
+    if ch in MM2_PIPE_SIDEWAYS:
+        return OUT_GROUND
 
-    is_top        = not is_pipe_tile(above)
+    above = grid[row - 1][col] if row > 0           else " "
+    below = grid[row + 1][col] if row + 1 < height  else " "
+    right = grid[row][col + 1] if col + 1 < width   else " "
+    left  = grid[row][col - 1] if col - 1 >= 0      else " "
+
     is_right_half = is_pipe_tile(left) and not is_pipe_tile(right)
 
-    if is_top:
-        return PIPE_TOP_R if is_right_half else PIPE_TOP_L
+    if ch in MM2_PIPE_DOWN:
+        # Mouth faces down: cap row has no pipe below it
+        is_cap = not is_pipe_tile(below)
+        if is_cap:
+            return PIPE_CAP_R if is_right_half else PIPE_CAP_L
+        else:
+            return PIPE_UDB_R if is_right_half else PIPE_UDB_L
     else:
-        return PIPE_BOT_R if is_right_half else PIPE_BOT_L
+        # Standard upright: cap row has no pipe above it
+        is_cap = not is_pipe_tile(above)
+        if is_cap:
+            return PIPE_TOP_R if is_right_half else PIPE_TOP_L
+        else:
+            return PIPE_BOT_R if is_right_half else PIPE_BOT_L
 
 
 def find_cannon_positions(grid: list[list[str]]) -> dict[tuple[int, int], str]:
