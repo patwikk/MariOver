@@ -1,0 +1,524 @@
+#!/usr/bin/env python3
+import json, os, argparse
+from pathlib import Path
+
+CAT_TERRAIN  = "terrain"
+CAT_ENEMY    = "enemy"
+CAT_ITEM     = "item"
+CAT_PLATFORM = "platform"
+CAT_DOOR     = "door"
+CAT_HAZARD   = "hazard"
+CAT_DECO     = "deco"
+CAT_OTHER    = "other"
+
+OBJ_META = {
+    # terrain
+    "Ground":              ("#", "#8B6914", CAT_TERRAIN),
+    "Block":               ("B", "#C8A050", CAT_TERRAIN),
+    "Hard Block":          ("H", "#888888", CAT_TERRAIN),
+    "? Block":             ("?", "#F0C030", CAT_TERRAIN),
+    "Hidden Block":        ("h", "#CCCCCC", CAT_TERRAIN),
+    "Note Block":          ("N", "#E8A020", CAT_TERRAIN),
+    "Donut Block":         ("d", "#F09050", CAT_TERRAIN),
+    "Ice Block":           ("I", "#A0D8EF", CAT_TERRAIN),
+    "P Block":             ("p", "#CC44CC", CAT_TERRAIN),
+    "ON/OFF Block":        ("O", "#FF6600", CAT_TERRAIN),
+    "Dotted-Line Block":   (".", "#AAAAAA", CAT_TERRAIN),
+    "Blinking Block":      ("*", "#FFAA00", CAT_TERRAIN),
+    "Spike Block":         ("^", "#AA0000", CAT_TERRAIN),
+    "Crate":               ("C", "#B87333", CAT_TERRAIN),
+    "Stone":               ("S", "#999999", CAT_TERRAIN),
+    "Goal Ground":         ("_", "#00AA00", CAT_TERRAIN),
+    "Starting Brick":      ("{", "#C8A050", CAT_TERRAIN),
+    "Castle Bridge":       ("=", "#885522", CAT_TERRAIN),
+    "Tree":                ("T", "#228B22", CAT_TERRAIN),
+    "Slight Slope":        ("/", "#AA8833", CAT_TERRAIN),
+    "Steep Slope":         ("\\","#CC9933", CAT_TERRAIN),
+    # doors / warps
+    "Pipe":                ("|", "#00BB00", CAT_DOOR),
+    "Door":                ("D", "#4466FF", CAT_DOOR),
+    "Warp Box":            ("W", "#6644FF", CAT_DOOR),
+    "Key":                 ("k", "#FFD700", CAT_DOOR),
+    "Checkpoint Flag":     ("f", "#00DDAA", CAT_DOOR),
+    "Goal":                ("G", "#00FF44", CAT_DOOR),
+    "Clear Pipe":          ("c", "#44FFCC", CAT_DOOR),
+    # enemies
+    "Goomba":              ("g", "#CC6600", CAT_ENEMY),
+    "Koopa":               ("K", "#44AA00", CAT_ENEMY),
+    "Piranha Plant":       ("P", "#DD2200", CAT_ENEMY),
+    "Hammer Bro":          ("m", "#2244AA", CAT_ENEMY),
+    "Thwomp":              ("t", "#6655AA", CAT_ENEMY),
+    "Bob-omb":             ("o", "#444444", CAT_ENEMY),
+    "Spiny":               ("s", "#CC2222", CAT_ENEMY),
+    "Buzzy Beetle":        ("b", "#334488", CAT_ENEMY),
+    "Lakitu":              ("L", "#DDAA00", CAT_ENEMY),
+    "Lakitu's Cloud":      ("l", "#CCCCAA", CAT_ENEMY),
+    "Banzai Bill":         ("Z", "#333333", CAT_ENEMY),
+    "Bullet Bill Blaster": ("V", "#333333", CAT_ENEMY),
+    "Magikoopa":           ("y", "#8844CC", CAT_ENEMY),
+    "Spike Top":           ("<", "#AA3322", CAT_ENEMY),
+    "Boo":                 ("u", "#DDDDDD", CAT_ENEMY),
+    "Bowser":              ("X", "#BB3300", CAT_ENEMY),
+    "Bowser Jr.":          ("x", "#CC5511", CAT_ENEMY),
+    "Chain Chomp":         ("@", "#333333", CAT_ENEMY),
+    "Cheep Cheep":         ("~", "#FF4488", CAT_ENEMY),
+    "Blooper":             ("q", "#DDDDDD", CAT_ENEMY),
+    "Wiggler":             ("w", "#AADD00", CAT_ENEMY),
+    "Pokey":               ("Y", "#CCAA22", CAT_ENEMY),
+    "Piranha Creeper":     ("e", "#AA2200", CAT_ENEMY),
+    "Porcupuffer":         ("F", "#8866AA", CAT_ENEMY),
+    "Fish Bone":           ("%", "#AAAAAA", CAT_ENEMY),
+    "Lava Bubble":         ("&", "#FF4400", CAT_ENEMY),
+    "Rocky Wrench":        ("r", "#888844", CAT_ENEMY),
+    "Muncher":             (",", "#00AA22", CAT_ENEMY),
+    "Ant Trooper":         ("a", "#AA3300", CAT_ENEMY),
+    "Monty Mole":          ("n", "#885522", CAT_ENEMY),
+    "Mechakoopa":          ("R", "#666666", CAT_ENEMY),
+    "Boom Boom":           ("!", "#BB4400", CAT_ENEMY),
+    "Dry Bones":           ("9", "#BBBBAA", CAT_ENEMY),
+    "Skipsqueak":          ("j", "#FFAA88", CAT_ENEMY),
+    "Stingby":             (";", "#DDCC00", CAT_ENEMY),
+    "Angry Sun":           ("A", "#FF8800", CAT_ENEMY),
+    "Charvaargh":          ("v", "#FF3300", CAT_ENEMY),
+    "Bully":               ("[", "#883300", CAT_ENEMY),
+    "Lemmy":               ("1", "#FF88CC", CAT_ENEMY),
+    "Morton":              ("2", "#888888", CAT_ENEMY),
+    "Larry":               ("3", "#44AA44", CAT_ENEMY),
+    "Wendy":               ("4", "#FF44AA", CAT_ENEMY),
+    "Iggy":                ("5", "#44AAFF", CAT_ENEMY),
+    "Roy":                 ("6", "#AA44FF", CAT_ENEMY),
+    "Ludwig":              ("7", "#4444CC", CAT_ENEMY),
+    # items
+    "Coin":                ("¢", "#FFD700", CAT_ITEM),
+    "Red Coin":            ("$", "#FF2200", CAT_ITEM),
+    "Large Coin":          ("£", "#FFAA00", CAT_ITEM),
+    "1-Up Mushroom":       ("U", "#00CC00", CAT_ITEM),
+    "Fire Flower":         ("i", "#FF5500", CAT_ITEM),
+    "Super Star":          ("*", "#FFFF00", CAT_ITEM),
+    "Super Mushroom":      ("M", "#EE2222", CAT_ITEM),
+    "Big Mushroom":        ("¶", "#CC1111", CAT_ITEM),
+    "SMB2 Mushroom":       ("§", "#884488", CAT_ITEM),
+    "Super Hammer":        ("¬", "#996622", CAT_ITEM),
+    "P Switch":            ("¦", "#4488FF", CAT_ITEM),
+    "POW Block":           ("¯", "#3366FF", CAT_ITEM),
+    "Spring":              ("±", "#DDDD00", CAT_ITEM),
+    "Goomba's Shoe":       ("µ", "#CC6600", CAT_ITEM),
+    "Cannon Box":          ("]", "#666666", CAT_ITEM),
+    "Propeller Box":       ("}", "#8888FF", CAT_ITEM),
+    "Goomba Mask":         (")", "#CC6600", CAT_ITEM),
+    "Bullet Bill Mask":    ("°", "#333333", CAT_ITEM),
+    "Red POW Box":         ("²", "#FF3333", CAT_ITEM),
+    # platforms
+    "Lift":                ("-", "#DDAA55", CAT_PLATFORM),
+    "Mushroom Platform":   ("³", "#FF6688", CAT_PLATFORM),
+    "Semisolid Platform":  ("´", "#AAAAFF", CAT_PLATFORM),
+    "Bridge":              ("·", "#AA8833", CAT_PLATFORM),
+    "Lava Lift":           ("¸", "#FF4400", CAT_PLATFORM),
+    "Snake Block":         ("¹", "#44CC44", CAT_PLATFORM),
+    "Track Block":         ("º", "#AA6622", CAT_PLATFORM),
+    "Conveyor Belt":       ("»", "#888888", CAT_PLATFORM),
+    "Fast Conveyor Belt":  ("¼", "#555555", CAT_PLATFORM),
+    "Sprint Platform":     ("½", "#FF8800", CAT_PLATFORM),
+    "Seesaw":              ("¾", "#AA8844", CAT_PLATFORM),
+    "Swinging Claw":       ("¿", "#AAAAAA", CAT_PLATFORM),
+    "ON/OFF Trampoline":   ("À", "#FF6600", CAT_PLATFORM),
+    "Mushroom Trampoline": ("Á", "#FF4488", CAT_PLATFORM),
+    "Jumping Machine":     ("J", "#8844FF", CAT_PLATFORM),
+    "Half-Collision Platform": ("Â", "#CCCCAA", CAT_PLATFORM),
+    "Donut":               ("Ã", "#F09050", CAT_PLATFORM),
+    # hazards
+    "Fire Bar":            ("Ä", "#FF4400", CAT_HAZARD),
+    "Saw":                 ("Å", "#AAAAAA", CAT_HAZARD),
+    "Burner":              ("Æ", "#FF6600", CAT_HAZARD),
+    "Spikes":              ("Ç", "#888888", CAT_HAZARD),
+    "Spike Ball":          ("È", "#884444", CAT_HAZARD),
+    "Skewer":              ("É", "#666666", CAT_HAZARD),
+    "Twister":             ("Ê", "#AADDFF", CAT_HAZARD),
+    "Icicle":              ("Ë", "#AADDFF", CAT_HAZARD),
+    # deco
+    "Cloud":               ("Ì", "#CCCCFF", CAT_DECO),
+    "Vine":                ("Í", "#00BB00", CAT_DECO),
+    "Water Marker":        ("Î", "#0055FF", CAT_DECO),
+    "Arrow":               ("Ï", "#FFFF00", CAT_DECO),
+    "One-Way Wall":        ("Ð", "#FFFF88", CAT_DECO),
+    "Reel Camera":         ("Ñ", "#AAAAAA", CAT_DECO),
+    "Sound Effect":        ("Ò", "#FFAAFF", CAT_DECO),
+    # other
+    "Player":              ("Ó", "#0000FF", CAT_OTHER),
+    "Clown Car":           ("Ô", "#FF4488", CAT_OTHER),
+    "Koopa Clown Car":     ("Õ", "#44AA00", CAT_OTHER),
+    "Track":               ("Ö", "#AAAAAA", CAT_OTHER),
+    "Starting Arrow":      ("×", "#FFFF00", CAT_OTHER),
+    "Cannon":              ("Ø", "#444444", CAT_OTHER),
+    "! Block":             ("Ù", "#FFAA00", CAT_OTHER),
+    "_unknown":            ("?", "#FF00FF", CAT_OTHER),
+}
+
+GROUND_COLOR = "#8B6914"
+GROUND_CHAR  = "#"
+
+CAT_COLORS = {
+    CAT_TERRAIN:  "#C8A050",
+    CAT_ENEMY:    "#CC4444",
+    CAT_ITEM:     "#FFD700",
+    CAT_PLATFORM: "#5599FF",
+    CAT_DOOR:     "#44AAFF",
+    CAT_HAZARD:   "#FF6600",
+    CAT_DECO:     "#88BB88",
+    CAT_OTHER:    "#AAAAAA",
+}
+
+def get_meta(name: str):
+    return OBJ_META.get(name, OBJ_META["_unknown"])
+
+
+# ---------------------------------------------------------------------------
+# Pipe direction helpers (flag % 0x80: 0x00=R, 0x20=L, 0x40=U, 0x60=D)
+# ---------------------------------------------------------------------------
+def _pipe_direction(flag: int) -> str:
+    d = flag % 0x80
+    if d == 0x00: return 'R'
+    if d == 0x20: return 'L'
+    if d == 0x40: return 'U'
+    return 'D'
+
+_PIPE_DIR_CHAR = {'R': '→', 'L': '←', 'U': '↑', 'D': '↓'}
+
+
+# ---------------------------------------------------------------------------
+# Tile size helper — uses w/h from JSON directly (already tile counts)
+# ---------------------------------------------------------------------------
+def obj_tile_size(obj: dict):
+    """Return (w_tiles, h_tiles). The JSON w/h fields are direct tile counts.
+
+    Pipes use h as the pipe length (C++ objH) regardless of direction;
+    the cross-section is always 2 tiles wide/tall.
+    """
+    if obj.get("name") == "Pipe":
+        direction = _pipe_direction(obj.get("flag", 0))
+        length = max(1, obj.get("h", 1))
+        if direction in ('U', 'D'):
+            return 2, length
+        else:
+            return length, 2
+    w = max(1, obj.get("w", 1))
+    h = max(1, obj.get("h", 1))
+    return w, h
+
+
+# Objects whose x coordinate is the left-tile center (x = col*160 + 80).
+# The C++ drawer uses the per-tile formula  j - 0.5 + x/160  for these,
+# so  col = x // 160  is already correct — no w//2 correction.
+# Everything else (Thwomp, Skewer, Lift, Saw, Arrow, Donut, …) uses the
+# center-of-span formula  -w/2 + x/160  →  col = x//160 - w//2.
+_LEFT_ANCHOR = frozenset({
+    "Pipe",
+    "Bridge",
+    "Conveyor Belt",
+    "Fast Conveyor Belt",
+    "Mushroom Platform",
+    "Semisolid Platform",
+    "Slight Slope",
+    "Steep Slope",
+    "Half-Collision Platform",
+    # synthetic objects injected by _normalize_level use tile coords directly
+    "Ground",
+    "Starting Brick",
+    "Goal",
+})
+
+
+def obj_anchor(obj: dict):
+    """Return (col, row) — bottom-left tile of the object.
+
+    Left-anchor objects store x as the left-tile center (x = col*160 + 80)
+    and are drawn per-tile with  j - 0.5 + x/160  in the C++ renderer.
+    All other objects store x as the center of their full bounding span and
+    are drawn with  -w/2 + x/160  — equivalent to  x//160 - w//2  for both
+    even-width (x%160==0) and odd-width (x%160==80) cases.
+    y is always the bottom-tile center for all JSON objects, so
+    row = y // 160 is always correct.
+
+    Pipes require direction-specific anchor adjustment derived from the C++
+    rendering offsets for each direction case.
+    """
+    if obj.get("name") == "Pipe":
+        direction = _pipe_direction(obj.get("flag", 0))
+        base_col = obj["x"] // 160
+        base_row = obj["y"] // 160
+        w, h = obj_tile_size(obj)
+        if direction == 'U':
+            # columns [col, col+1], rows [base_row, base_row+h-1]
+            return base_col, base_row
+        elif direction == 'D':
+            # x offset -1 tile; pipe extends downward (decreasing row)
+            return base_col - 1, base_row - h + 1
+        elif direction == 'R':
+            # columns [col, col+w-1], rows [base_row, base_row]
+            return base_col, base_row - 1
+        else:  # L
+            # pipe extends left; y stays the same
+            return base_col - w + 1, base_row
+
+    w, h = obj_tile_size(obj)
+    x = obj["x"]
+    if obj.get("name", "") in _LEFT_ANCHOR:
+        col = x // 160
+    else:
+        col = x // 160 - w // 2
+    row = obj["y"] // 160
+    return col, row
+
+
+# ---------------------------------------------------------------------------
+# Main viewer window
+# ---------------------------------------------------------------------------
+# Slope tile iterator
+# ---------------------------------------------------------------------------
+_SLOPE_NAMES = frozenset({"Slight Slope", "Steep Slope"})
+
+def slope_tiles(obj: dict):
+    """
+    Generate all solid terrain cells occupied by a Mario Maker slope.
+
+    ID 87 = Slight Slope (rise 1, run 2)
+    ID 88 = Steep Slope  (rise 1, run 1)
+
+    Direction bit:
+        flag & 0x100000 == 0  -> left slope
+        flag & 0x100000 != 0  -> right slope
+
+    Returns:
+        (col, row)
+    """
+
+    base_col, base_row = obj_anchor(obj)
+    w, h = obj_tile_size(obj)
+
+    if w <= 0 or h <= 0:
+        return
+
+    obj_id = obj["id"]
+
+    if obj_id == 87:
+        step = 2      # gentle slope
+    elif obj_id == 88:
+        step = 1      # steep slope
+    else:
+        return
+
+    right_slope = (obj.get("flag", 0) & 0x100000) != 0
+
+    for row in range(h):
+
+        if right_slope:
+            x_start = row * step
+            x_end = min(w, (row + 1) * step)
+
+            # fill behind the slope edge
+            fill_start = x_end
+            fill_end = w
+
+        else:
+            x_start = max(0, w - (row + 1) * step)
+            x_end = w - row * step
+
+            # fill behind the slope edge
+            fill_start = 0
+            fill_end = x_start
+
+        x_start = max(0, x_start)
+        x_end = min(w, x_end)
+
+        # slope cells
+        for x in range(x_start, x_end):
+            yield (
+                base_col + x,
+                base_row + (h - row - 1)
+            )
+
+    
+        
+    
+
+
+# ---------------------------------------------------------------------------
+
+
+def normalize_level(lvl):
+    if lvl.get("_normalized"):
+        return
+    lvl["_normalized"] = True
+
+    objects = lvl.get("objects", [])
+
+    for g in lvl.get("ground", []):
+        objects.append({
+            "name":"Ground","x":g["x"]*160,"y":g["y"]*160,"w":1,"h":1
+        })
+
+    if "is_overworld" in lvl:
+        is_overworld = bool(lvl["is_overworld"])
+    else:
+        src_name = os.path.basename(lvl.get("_source_file","")).lower()
+        is_overworld = "_subworld" not in src_name
+
+    if not is_overworld:
+        lvl["objects"] = objects
+        return
+
+    start_y = lvl.get("start_y",0)
+    objects.append({
+        "name":"Starting Brick",
+        "x":1*160+80,
+        "y":start_y*160,
+        "w":3,
+        "h":3
+    })
+
+    for col in range(0,7):
+        for row in range(0,start_y):
+            objects.append({
+                "name":"Ground",
+                "x":col*160,
+                "y":row*160,
+                "w":1,
+                "h":1
+            })
+
+    goal_x = lvl.get("goal_x",0)
+    goal_y = lvl.get("goal_y",0)
+    goal_col = goal_x // 10
+
+    is_castle = (lvl.get("theme_raw",-1)==2 or lvl.get("theme","")=="Castle")
+    is_3dw = (lvl.get("gamestyle","")=="SM3DW" or lvl.get("gamestyle_raw",0)==22323)
+
+    if is_castle and not is_3dw:
+        objects.append({
+            "name":"Goal","x":goal_col*160,"y":goal_y*160,"w":2,"h":4
+        })
+        for i in range(14):
+            objects.append({
+                "name":"Castle Bridge",
+                "x":(goal_col-14+i)*160,
+                "y":(goal_y*160)-1,
+                "w":1,
+                "h":1
+            })
+    else:
+        objects.append({
+            "name":"Goal","x":goal_col*160,"y":goal_y*160,"w":1,"h":11
+        })
+
+    for col in range(goal_col, goal_col+13):
+        for row in range(0, goal_y):
+            objects.append({
+                "name":"Ground",
+                "x":col*160,
+                "y":row*160,
+                "w":1,
+                "h":1
+            })
+
+    lvl["objects"] = objects
+
+
+def grid_bounds(lvl):
+    top_b = lvl.get("top_boundary",0)
+    right_b = lvl.get("right_boundary",0)
+    if top_b > 0 and right_b > 0:
+        max_tx = right_b // 16
+        max_ty = top_b // 16
+    else:
+        max_tx,max_ty = 40,20
+        for o in lvl.get("objects",[]):
+            col,row = obj_anchor(o)
+            w,h = obj_tile_size(o)
+            max_tx = max(max_tx, col+w+1)
+            max_ty = max(max_ty, row+h+1)
+    return min(max_tx,240), min(max_ty,28)
+
+
+def build_ascii_grid(level):
+    objects = level.get("objects", [])
+    max_tx,max_ty = grid_bounds(level)
+
+    grid = [[" "] * max_tx for _ in range(max_ty)]
+
+    def set_cell(col,row_game,ch):
+        if 0 <= col < max_tx and 0 <= row_game < max_ty:
+            grid[max_ty - 1 - row_game][col] = ch
+
+    BG_TYPES = {"Semisolid Platform","Mushroom Platform"}
+
+    for pass_n in range(2):
+        for obj in objects:
+            obj_name = obj.get("name","_unknown")
+            is_bg = obj_name in BG_TYPES
+            if pass_n == 0 and not is_bg:
+                continue
+            if pass_n == 1 and is_bg:
+                continue
+
+            char,_,_ = get_meta(obj_name)
+
+            if obj_name == "Pipe":
+                char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag",0)), char)
+
+            if obj_name in _SLOPE_NAMES:
+                for tc,tr in slope_tiles(obj):
+                    set_cell(tc,tr,GROUND_CHAR)
+
+                    right_slope = (obj.get("flag",0) & 0x100000) != 0
+                    step = 2 if obj["id"] == 87 else 1
+
+                    if step == 1:
+                        fill_tc = tc + 1 if right_slope else tc - 1
+                    else:
+                        fill_tc = tc + 2 if right_slope else tc - 2
+
+                    set_cell(fill_tc,tr,GROUND_CHAR)
+            else:
+                col,row = obj_anchor(obj)
+                w,h = obj_tile_size(obj)
+
+                for dx in range(w):
+                    for dy in range(h):
+                        set_cell(col+dx,row+dy,char)
+
+    return ["".join(r).rstrip() for r in grid]
+
+
+def convert_file(infile, outdir):
+    data = json.loads(Path(infile).read_text(encoding="utf-8"))
+    levels = data if isinstance(data, list) else [data]
+
+    for lvl in levels:
+        lvl.setdefault("_source_file", str(infile))
+        normalize_level(lvl)
+
+    for idx,lvl in enumerate(levels, start=1):
+        stem = Path(infile).stem
+        suffix = f"_{idx}" if len(levels) > 1 else ""
+        outfile = Path(outdir) / f"{stem}{suffix}.txt"
+        outfile.write_text("\n".join(build_ascii_grid(lvl)) + "\n", encoding="utf-8")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("input_folder")
+    ap.add_argument("output_folder")
+    args = ap.parse_args()
+
+    outdir = Path(args.output_folder)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    for jf in sorted(Path(args.input_folder).glob("*.json")):
+        try:
+            convert_file(jf, outdir)
+            print(f"Converted {jf.name}")
+        except Exception as e:
+            print(f"Failed {jf.name}: {e}")
+
+if __name__ == "__main__":
+    main()
