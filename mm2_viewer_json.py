@@ -193,10 +193,34 @@ def get_meta(name: str):
 
 
 # ---------------------------------------------------------------------------
+# Pipe direction helpers (flag % 0x80: 0x00=R, 0x20=L, 0x40=U, 0x60=D)
+# ---------------------------------------------------------------------------
+def _pipe_direction(flag: int) -> str:
+    d = flag % 0x80
+    if d == 0x00: return 'R'
+    if d == 0x20: return 'L'
+    if d == 0x40: return 'U'
+    return 'D'
+
+_PIPE_DIR_CHAR = {'R': '→', 'L': '←', 'U': '↑', 'D': '↓'}
+
+
+# ---------------------------------------------------------------------------
 # Tile size helper — uses w/h from JSON directly (already tile counts)
 # ---------------------------------------------------------------------------
 def obj_tile_size(obj: dict):
-    """Return (w_tiles, h_tiles). The JSON w/h fields are direct tile counts."""
+    """Return (w_tiles, h_tiles). The JSON w/h fields are direct tile counts.
+
+    Pipes use h as the pipe length (C++ objH) regardless of direction;
+    the cross-section is always 2 tiles wide/tall.
+    """
+    if obj.get("name") == "Pipe":
+        direction = _pipe_direction(obj.get("flag", 0))
+        length = max(1, obj.get("h", 1))
+        if direction in ('U', 'D'):
+            return 2, length
+        else:
+            return length, 2
     w = max(1, obj.get("w", 1))
     h = max(1, obj.get("h", 1))
     return w, h
@@ -234,7 +258,28 @@ def obj_anchor(obj: dict):
     even-width (x%160==0) and odd-width (x%160==80) cases.
     y is always the bottom-tile center for all JSON objects, so
     row = y // 160 is always correct.
+
+    Pipes require direction-specific anchor adjustment derived from the C++
+    rendering offsets for each direction case.
     """
+    if obj.get("name") == "Pipe":
+        direction = _pipe_direction(obj.get("flag", 0))
+        base_col = obj["x"] // 160
+        base_row = obj["y"] // 160
+        w, h = obj_tile_size(obj)
+        if direction == 'U':
+            # columns [col, col+1], rows [base_row, base_row+h-1]
+            return base_col, base_row
+        elif direction == 'D':
+            # x offset -1 tile; pipe extends downward (decreasing row)
+            return base_col - 1, base_row - h + 1
+        elif direction == 'R':
+            # columns [col, col+w-1], rows [base_row, base_row+1]
+            return base_col, base_row
+        else:  # L
+            # pipe extends left; y offset +1 tile
+            return base_col - w + 1, base_row + 1
+
     w, h = obj_tile_size(obj)
     x = obj["x"]
     if obj.get("name", "") in _LEFT_ANCHOR:
@@ -356,28 +401,40 @@ class MM2Viewer(tk.Tk):
 
         objects = lvl.get("objects", [])
 
-        # 1. First, parse the explicit terrain blocks from the clean 'ground' array
+        # 1. Explicit terrain from the ground array (always present, overworld or not)
         for g in lvl.get("ground", []):
             objects.append({
                 "name": "Ground",
-                "x":    g["x"] * 160,   # tile col → sub-pixels
-                "y":    g["y"] * 160,   # tile row → sub-pixels (y=0 at bottom)
+                "x":    g["x"] * 160,
+                "y":    g["y"] * 160,
                 "w":    1,
                 "h":    1,
             })
+
+        # Determine overworld vs subworld (C++ NowIO check).
+        # Prefer the JSON boolean; fall back to the source filename injected by the loader.
+        if "is_overworld" in lvl:
+            is_overworld = bool(lvl["is_overworld"])
+        else:
+            src_name = os.path.basename(lvl.get("_source_file", "")).lower()
+            is_overworld = "_subworld" not in src_name
+
+        # Subworlds have no fixed start/goal structure.
+        if not is_overworld:
+            lvl["objects"] = objects
+            return
 
         # 2. Starting structure — C++ draws at col 1, 3 wide, 3 tall at start_y.
         # Left-anchor convention: x = col*160 + 80.
         start_y = lvl.get("start_y", 0)
         objects.append({
             "name": "Starting Brick",
-            "x": 1 * 160 + 80,   # left-anchor at col 1
+            "x": 1 * 160 + 80,
             "y": start_y * 160,
             "w": 3,
             "h": 3,
         })
 
-        # Ground columns from the left edge up to start_y
         for col in range(0, 7):
             for row in range(0, start_y):
                 objects.append({
@@ -388,19 +445,42 @@ class MM2Viewer(tk.Tk):
                     "h":    1,
                 })
 
-        # 3. Goal flagpole — C++ draws 1 wide × 11 tall at GoalX/10.0 - 0.5 tiles.
-        # goal_x // 10 gives the correct integer tile column.
+        # 3. Goal — castle (axe + bridge) for all styles except SM3DW; flagpole otherwise.
+        # C++ DrawGrd uses theme==2 (castle) for the axe, but SM3DW has no castle variant.
         goal_x = lvl.get("goal_x", 0)
         goal_y = lvl.get("goal_y", 0)
         goal_col = goal_x // 10
 
-        objects.append({
-            "name": "Goal",
-            "x": goal_col * 160,   # left-anchor: col*160 (x%160==0, w=1 so no w//2 correction)
-            "y": goal_y * 160,
-            "w": 1,
-            "h": 11,
-        })
+        is_castle = (lvl.get("theme_raw", -1) == 2 or lvl.get("theme", "") == "Castle")
+        is_3dw    = (lvl.get("gamestyle", "") == "SM3DW" or lvl.get("gamestyle_raw", 0) == 22323)
+
+        if is_castle and not is_3dw:
+            # Axe: 2 wide × 4 tall
+            objects.append({
+                "name": "Goal",
+                "x": goal_col * 160,
+                "y": goal_y * 160,
+                "w": 2,
+                "h": 4,
+            })
+            # Castle bridge: 14 tiles extending left up to the axe
+            for i in range(14):
+                objects.append({
+                    "name": "Castle Bridge",
+                    "x": (goal_col - 14 + i) * 160,
+                    "y": goal_y * 160,
+                    "w": 1,
+                    "h": 1,
+                })
+        else:
+            # Flagpole: 1 wide × 11 tall
+            objects.append({
+                "name": "Goal",
+                "x": goal_col * 160,
+                "y": goal_y * 160,
+                "w": 1,
+                "h": 11,
+            })
 
         # Ground columns extending rightward from the goal
         for col in range(goal_col, goal_col + 13):
@@ -430,6 +510,7 @@ class MM2Viewer(tk.Tk):
                 
             # Normalize the level data before rendering
             for lvl in data:
+                lvl.setdefault("_source_file", path)
                 self._normalize_level(lvl)
                 
             self.levels = data
@@ -530,6 +611,8 @@ class MM2Viewer(tk.Tk):
                     if pass_n == 0 and not is_bg: continue
                     if pass_n == 1 and is_bg:     continue
                     char, color, cat = get_meta(obj_name)
+                    if obj_name == "Pipe":
+                        char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag", 0)), char)
                     if cat not in active:
                         continue
                     col, row = obj_anchor(obj)
@@ -573,6 +656,8 @@ class MM2Viewer(tk.Tk):
                 if pass_n == 0 and not is_bg: continue
                 if pass_n == 1 and is_bg:     continue
                 char, _, _ = get_meta(obj_name)
+                if obj_name == "Pipe":
+                    char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag", 0)), char)
                 col, row = obj_anchor(obj)
                 w, h = obj_tile_size(obj)
                 for dc in range(w):
@@ -678,6 +763,7 @@ if __name__ == "__main__":
                 
             # Normalize the CLI-loaded data
             for lvl in data:
+                lvl.setdefault("_source_file", sys.argv[1])
                 app._normalize_level(lvl)
                 
             app.levels = data
