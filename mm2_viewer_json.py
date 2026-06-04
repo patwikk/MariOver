@@ -274,11 +274,11 @@ def obj_anchor(obj: dict):
             # x offset -1 tile; pipe extends downward (decreasing row)
             return base_col - 1, base_row - h + 1
         elif direction == 'R':
-            # columns [col, col+w-1], rows [base_row, base_row+1]
-            return base_col, base_row
+            # columns [col, col+w-1], rows [base_row, base_row]
+            return base_col, base_row - 1
         else:  # L
-            # pipe extends left; y offset +1 tile
-            return base_col - w + 1, base_row + 1
+            # pipe extends left; y stays the same
+            return base_col - w + 1, base_row
 
     w, h = obj_tile_size(obj)
     x = obj["x"]
@@ -292,6 +292,76 @@ def obj_anchor(obj: dict):
 
 # ---------------------------------------------------------------------------
 # Main viewer window
+# ---------------------------------------------------------------------------
+# Slope tile iterator
+# ---------------------------------------------------------------------------
+_SLOPE_NAMES = frozenset({"Slight Slope", "Steep Slope"})
+
+def slope_tiles(obj: dict):
+    """
+    Generate all solid terrain cells occupied by a Mario Maker slope.
+
+    ID 87 = Slight Slope (rise 1, run 2)
+    ID 88 = Steep Slope  (rise 1, run 1)
+
+    Direction bit:
+        flag & 0x100000 == 0  -> left slope
+        flag & 0x100000 != 0  -> right slope
+
+    Returns:
+        (col, row)
+    """
+
+    base_col, base_row = obj_anchor(obj)
+    w, h = obj_tile_size(obj)
+
+    if w <= 0 or h <= 0:
+        return
+
+    obj_id = obj["id"]
+
+    if obj_id == 87:
+        step = 2      # gentle slope
+    elif obj_id == 88:
+        step = 1      # steep slope
+    else:
+        return
+
+    right_slope = (obj.get("flag", 0) & 0x100000) != 0
+
+    for row in range(h):
+
+        if right_slope:
+            x_start = row * step
+            x_end = min(w, (row + 1) * step)
+
+            # fill behind the slope edge
+            fill_start = x_end
+            fill_end = w
+
+        else:
+            x_start = max(0, w - (row + 1) * step)
+            x_end = w - row * step
+
+            # fill behind the slope edge
+            fill_start = 0
+            fill_end = x_start
+
+        x_start = max(0, x_start)
+        x_end = min(w, x_end)
+
+        # slope cells
+        for x in range(x_start, x_end):
+            yield (
+                base_col + x,
+                base_row + (h - row - 1)
+            )
+
+    
+        
+    
+
+
 # ---------------------------------------------------------------------------
 class MM2Viewer(tk.Tk):
     TILE_PX  = 160
@@ -468,7 +538,7 @@ class MM2Viewer(tk.Tk):
                 objects.append({
                     "name": "Castle Bridge",
                     "x": (goal_col - 14 + i) * 160,
-                    "y": goal_y * 160,
+                    "y": (goal_y * 160) - 1,
                     "w": 1,
                     "h": 1,
                 })
@@ -613,23 +683,69 @@ class MM2Viewer(tk.Tk):
                     char, color, cat = get_meta(obj_name)
                     if obj_name == "Pipe":
                         char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag", 0)), char)
+                    if obj_name in _SLOPE_NAMES:
+                        char = "/" if (obj.get("flag", 0) >> 20) & 1 else "\\"
                     if cat not in active:
                         continue
                     col, row = obj_anchor(obj)
                     w, h = obj_tile_size(obj)
-                    if col >= max_tx or row >= max_ty:
-                        continue
-                    px0 = col * ts + pad
-                    py1 = (max_ty - 1 - row) * ts + ts - pad
-                    px1 = (col + w) * ts - pad
-                    py0 = (max_ty - 1 - (row + h - 1)) * ts + pad
                     outline_col = "#888888" if is_bg else "#000000"
-                    self.canvas.create_rectangle(px0, py0, px1, py1,
-                                                 fill=color, outline=outline_col)
-                    if show_lbl:
-                        self.canvas.create_text((px0 + px1) // 2, (py0 + py1) // 2,
-                                                text=char, fill="white",
-                                                font=("Courier", max(ts // 2, 7), "bold"))
+                    font_sz = ("Courier", max(ts // 2, 7), "bold")
+                    if obj_name in _SLOPE_NAMES:
+                        for tc, tr in slope_tiles(obj):
+                            if tc < 0 or tc >= max_tx or tr < 0 or tr >= max_ty:
+                                continue
+                            spx0 = tc * ts + pad
+                            spx1 = (tc + 1) * ts - pad
+                            spy0 = (max_ty - 1 - tr) * ts + pad
+                            spy1 = (max_ty - 1 - tr) * ts + ts - pad
+                            self.canvas.create_rectangle(spx0, spy0, spx1, spy1,
+                                                         fill=color, outline=outline_col)
+                            if show_lbl:
+                                self.canvas.create_text((spx0 + spx1) // 2, (spy0 + spy1) // 2,
+                                                        text=char, fill="white", font=font_sz)
+                            # ---- Fill supporting ground blocks ----
+
+                            right_slope = (obj.get("flag", 0) & 0x100000) != 0
+                            step = 2 if obj["id"] == 87 else 1
+
+                            # Gentle slopes: only place support once per pair of slope tiles
+                            base_col, _ = obj_anchor(obj)
+                            if step == 2 or ((tc - base_col) % step == 0):
+                                
+                                fill_tc = tc + 1 if right_slope else tc - 1
+
+                                if 0 <= fill_tc < max_tx:
+
+                                    fpx0 = fill_tc * ts + pad
+                                    fpx1 = (fill_tc + 1) * ts - pad
+
+                                    self.canvas.create_rectangle(
+                                        fpx0, spy0, fpx1, spy1,
+                                        fill=GROUND_COLOR,
+                                        outline=outline_col
+                                    )
+
+                                    if show_lbl:
+                                        self.canvas.create_text(
+                                            (fpx0 + fpx1) // 2,
+                                            (spy0 + spy1) // 2,
+                                            text="#",
+                                            fill="white",
+                                            font=font_sz
+                                        )
+                    else:
+                        if col >= max_tx or row >= max_ty:
+                            continue
+                        px0 = col * ts + pad
+                        py1 = (max_ty - 1 - row) * ts + ts - pad
+                        px1 = (col + w) * ts - pad
+                        py0 = (max_ty - 1 - (row + h - 1)) * ts + pad
+                        self.canvas.create_rectangle(px0, py0, px1, py1,
+                                                     fill=color, outline=outline_col)
+                        if show_lbl:
+                            self.canvas.create_text((px0 + px1) // 2, (py0 + py1) // 2,
+                                                    text=char, fill="white", font=font_sz)
 
         self.info_lbl.config(
             text=f"[{self.current_idx + 1}/{len(self.levels)}]  {name}  |  "
@@ -658,12 +774,34 @@ class MM2Viewer(tk.Tk):
                 char, _, _ = get_meta(obj_name)
                 if obj_name == "Pipe":
                     char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag", 0)), char)
+                if obj_name in _SLOPE_NAMES:
+                    char = "/" if (obj.get("flag", 0) >> 20) & 1 else "\\"
                 col, row = obj_anchor(obj)
                 w, h = obj_tile_size(obj)
-                for dc in range(w):
-                    for dr in range(h):
-                        set_cell(col + dc, row + dr, char)
+                if obj_name in _SLOPE_NAMES:
 
+                    for tc, tr in slope_tiles(obj):
+                        set_cell(tc, tr, GROUND_CHAR)
+
+                        right_slope = (obj.get("flag", 0) & 0x100000) != 0
+                        step = 2 if obj["id"] == 87 else 1
+
+                        base_col, _ = obj_anchor(obj)
+
+                        # Steep: every tile.
+                        # Gentle: once per 2-tile step.
+                        if step == 1:
+
+                            fill_tc = tc + 1 if right_slope else tc - 1
+                            set_cell(fill_tc, tr, GROUND_CHAR)
+                        else:
+                            fill_tc = tc + 2 if right_slope else tc - 2
+                            set_cell(fill_tc, tr, GROUND_CHAR)
+
+                else:
+                    for dx in range(w):
+                        for dy in range(h):
+                            set_cell(col + dx, row + dy, char)
         return grid, max_tx, max_ty
 
     def _render_ascii(self):
