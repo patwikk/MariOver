@@ -202,9 +202,47 @@ def obj_tile_size(obj: dict):
     return w, h
 
 
+# Objects whose x coordinate is the left-tile center (x = col*160 + 80).
+# The C++ drawer uses the per-tile formula  j - 0.5 + x/160  for these,
+# so  col = x // 160  is already correct — no w//2 correction.
+# Everything else (Thwomp, Skewer, Lift, Saw, Arrow, Donut, …) uses the
+# center-of-span formula  -w/2 + x/160  →  col = x//160 - w//2.
+_LEFT_ANCHOR = frozenset({
+    "Pipe",
+    "Bridge",
+    "Conveyor Belt",
+    "Fast Conveyor Belt",
+    "Mushroom Platform",
+    "Semisolid Platform",
+    "Slight Slope",
+    "Steep Slope",
+    "Half-Collision Platform",
+    # synthetic objects injected by _normalize_level use tile coords directly
+    "Ground",
+    "Starting Brick",
+    "Goal",
+})
+
+
 def obj_anchor(obj: dict):
-    """Return (col, row) — bottom-left tile of the object."""
-    return obj["x"] // 160, obj["y"] // 160
+    """Return (col, row) — bottom-left tile of the object.
+
+    Left-anchor objects store x as the left-tile center (x = col*160 + 80)
+    and are drawn per-tile with  j - 0.5 + x/160  in the C++ renderer.
+    All other objects store x as the center of their full bounding span and
+    are drawn with  -w/2 + x/160  — equivalent to  x//160 - w//2  for both
+    even-width (x%160==0) and odd-width (x%160==80) cases.
+    y is always the bottom-tile center for all JSON objects, so
+    row = y // 160 is always correct.
+    """
+    w, h = obj_tile_size(obj)
+    x = obj["x"]
+    if obj.get("name", "") in _LEFT_ANCHOR:
+        col = x // 160
+    else:
+        col = x // 160 - w // 2
+    row = obj["y"] // 160
+    return col, row
 
 
 # ---------------------------------------------------------------------------
@@ -328,18 +366,18 @@ class MM2Viewer(tk.Tk):
                 "h":    1,
             })
 
-        # 2. Add the Start block structure
+        # 2. Starting structure — C++ draws at col 1, 3 wide, 3 tall at start_y.
+        # Left-anchor convention: x = col*160 + 80.
         start_y = lvl.get("start_y", 0)
         objects.append({
             "name": "Starting Brick",
-            "x": 0,
+            "x": 1 * 160 + 80,   # left-anchor at col 1
             "y": start_y * 160,
             "w": 3,
-            "h": 1,
+            "h": 3,
         })
 
-        # Add 4 vertical columns (strips) of ground at the start (cols 0, 1, 2, 3)
-        # filled from row 0 up to start_y
+        # Ground columns from the left edge up to start_y
         for col in range(0, 7):
             for row in range(0, start_y):
                 objects.append({
@@ -350,21 +388,21 @@ class MM2Viewer(tk.Tk):
                     "h":    1,
                 })
 
-        # 3. Add the Goal flagpole structure
+        # 3. Goal flagpole — C++ draws 1 wide × 11 tall at GoalX/10.0 - 0.5 tiles.
+        # goal_x // 10 gives the correct integer tile column.
         goal_x = lvl.get("goal_x", 0)
         goal_y = lvl.get("goal_y", 0)
         goal_col = goal_x // 10
-        
+
         objects.append({
             "name": "Goal",
-            "x": goal_col * 160,
+            "x": goal_col * 160,   # left-anchor: col*160 (x%160==0, w=1 so no w//2 correction)
             "y": goal_y * 160,
             "w": 1,
-            "h": 5,
+            "h": 11,
         })
 
-        # Add 9 vertical columns (strips) of ground extending rightward from the goal position
-        # filled from row 0 up to goal_y
+        # Ground columns extending rightward from the goal
         for col in range(goal_col, goal_col + 13):
             for row in range(0, goal_y):
                 objects.append({
@@ -431,17 +469,22 @@ class MM2Viewer(tk.Tk):
 
 
     def _grid_bounds(self, lvl):
-        """Compute (max_tx, max_ty) from the level's object extents."""
-        objects = lvl.get("objects", [])
-        max_tx, max_ty = 40, 20
-        for o in objects:
-            col, row = obj_anchor(o)
-            w, h = obj_tile_size(o)
-            max_tx = max(max_tx, col + w + 1)
-            max_ty = max(max_ty, row + h + 1)
-        max_tx = min(max_tx, self.MAX_COLS)
-        max_ty = min(max_ty, self.MAX_ROWS)
-        return max_tx, max_ty
+        """Return (max_tx, max_ty) matching the C++ H = BorT/16, W = BorR/16."""
+        top_b   = lvl.get("top_boundary", 0)
+        right_b = lvl.get("right_boundary", 0)
+        if top_b > 0 and right_b > 0:
+            max_tx = right_b // 16
+            max_ty = top_b // 16
+        else:
+            # fallback for files without boundary fields
+            objects = lvl.get("objects", [])
+            max_tx, max_ty = 40, 20
+            for o in objects:
+                col, row = obj_anchor(o)
+                w, h = obj_tile_size(o)
+                max_tx = max(max_tx, col + w + 1)
+                max_ty = max(max_ty, row + h + 1)
+        return min(max_tx, self.MAX_COLS), min(max_ty, self.MAX_ROWS)
 
     def _redraw(self):
         self.canvas.delete("all")
