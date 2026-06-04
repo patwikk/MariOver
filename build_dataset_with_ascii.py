@@ -135,25 +135,36 @@ def collect_input_files(input_path):
         return [p]
     sys.exit(f"ERROR: Input path not found: {input_path}")
 
+def load_converter(filename, module_name):
+    import importlib.util
+    path = os.path.join(HERE, filename)
+    if not os.path.isfile(path):
+        sys.exit(f"ERROR: Converter module missing from {path}")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build dataset from custom tagged text files.")
     parser.add_argument("--input_file", required=True, help="Path to a .txt file or a folder of .txt files.")
     parser.add_argument("--output", required=True, help="Output JSON filename.")
-    parser.add_argument("--convert_to_vglc", action="store_true", help="Convert layout to VGLC structure.")
-    parser.add_argument("--tileset", default=os.path.join(HERE, "smb.json"), help="Path to smb.json tileset.")
+    parser.add_argument("--tileset", default=os.path.join(HERE, "smb.json"), help="Path to tileset JSON.")
+    convert_group = parser.add_mutually_exclusive_group()
+    convert_group.add_argument("--convert_to_vglc", action="store_true",
+                               help="Convert layout to VGLC structure (ascii_to_vglc.py).")
+    convert_group.add_argument("--convert_to_extended", action="store_true",
+                               help="Convert layout to extended tile format (mm2view_to_extended.py).")
     args = parser.parse_args()
 
     tile_to_id = load_tileset(args.tileset)
 
+    converter_mod = None
     if args.convert_to_vglc:
-        import importlib.util
-        vglc_filename = "ascii_to_vglc.py"
-        vglc_path = os.path.join(HERE, vglc_filename)
-        if not os.path.isfile(vglc_path):
-            sys.exit(f"ERROR: Custom VGLC converter missing from {vglc_path}")
-        spec = importlib.util.spec_from_file_location("ascii_to_vglc", vglc_path)
-        vglc_mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(vglc_mod)
+        converter_mod = load_converter("ascii_to_vglc.py", "ascii_to_vglc")
+    elif args.convert_to_extended:
+        converter_mod = load_converter("mm2view_to_extended.py", "mm2view_to_extended")
 
     input_files = collect_input_files(args.input_file)
     dataset = []
@@ -169,8 +180,8 @@ def main():
             # Prefix with the source filename so names stay unique across files
             full_name = f"{file_stem}/{name}" if len(input_files) > 1 else name
             try:
-                if args.convert_to_vglc:
-                    rows = vglc_mod.convert_level(rows)
+                if converter_mod is not None:
+                    rows = converter_mod.convert_level(rows)
                 else:
                     rows = [r.rstrip('\r\n') for r in rows]
 
