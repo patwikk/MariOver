@@ -28,9 +28,14 @@ def load_tileset(path):
         chars.append(EXTRA_TILE)
     return {ch: idx for idx, ch in enumerate(chars)}
 
+def _pad_rows(rows, width, empty_char):
+    pad_rows = max(0, WINDOW_H - len(rows))
+    padded = [empty_char * width] * pad_rows + list(rows)
+    return [r.ljust(width, empty_char) for r in padded]
+
 def extract_best_window(rows, tile_to_id, empty_char="-"):
-    empty_id = tile_to_id.get(empty_char, 0)
     extra_id = tile_to_id.get(EXTRA_TILE, 0)
+    empty_id = tile_to_id.get(empty_char, 0)
 
     height = len(rows)
     width = max((len(r) for r in rows), default=0)
@@ -38,9 +43,7 @@ def extract_best_window(rows, tile_to_id, empty_char="-"):
     if width < WINDOW_W or height == 0:
         return None
 
-    pad_rows = max(0, WINDOW_H - height)
-    padded = [empty_char * width] * pad_rows + list(rows)
-    padded = [r.ljust(width, empty_char) for r in padded]
+    padded = _pad_rows(rows, width, empty_char)
 
     best_score = -1
     best_scene = None
@@ -57,12 +60,33 @@ def extract_best_window(rows, tile_to_id, empty_char="-"):
                 if tid not in (empty_id, extra_id):
                     score += 1
             scene.append(id_row)
-        
+
         if score > best_score:
             best_score = score
             best_scene = scene
 
     return best_scene
+
+def extract_all_windows(rows, tile_to_id, stride=1, empty_char="-"):
+    """Slide a WINDOW_H x WINDOW_W window across the level and return every window."""
+    extra_id = tile_to_id.get(EXTRA_TILE, 0)
+
+    width = max((len(r) for r in rows), default=0)
+
+    if width < WINDOW_W or not rows:
+        return []
+
+    padded = _pad_rows(rows, width, empty_char)
+
+    scenes = []
+    for x in range(0, width - WINDOW_W + 1, stride):
+        scene = []
+        for y in range(WINDOW_H):
+            row_slice = padded[y][x : x + WINDOW_W]
+            scene.append([tile_to_id.get(ch, extra_id) for ch in row_slice])
+        scenes.append(scene)
+
+    return scenes
 
 def parse_source_file(file_path):
     """
@@ -158,6 +182,10 @@ def main():
                                help="Convert layout to extended tile format (mm2view_to_extended.py).")
     convert_group.add_argument("--include_all", action="store_true",
                                help="Brute-force mode: skip all converters and windowing, include every level as-is.")
+    parser.add_argument("--sliding_window", action="store_true",
+                        help="Collect every window position as a separate sample instead of keeping only the best window.")
+    parser.add_argument("--stride", type=int, default=1,
+                        help="Step size (in tiles) between windows when --sliding_window is active. Default: 1.")
     args = parser.parse_args()
 
     tile_to_id = load_tileset(args.tileset)
@@ -192,25 +220,33 @@ def main():
                     # Take the bottom WINDOW_H rows so ground is always included
                     if len(rows) > WINDOW_H:
                         rows = rows[-WINDOW_H:]
-                    scene = extract_best_window(rows, tile_to_id, empty_char=" ")
+                    empty_char = " "
                 elif converter_mod is not None:
                     rows = converter_mod.convert_level(rows)
-                    scene = extract_best_window(rows, tile_to_id)
+                    empty_char = "-"
                 else:
                     rows = [r.rstrip('\r\n') for r in rows]
-                    scene = extract_best_window(rows, tile_to_id)
+                    empty_char = "-"
 
-                if scene is None:
-                    print(f"  [SKIP] {full_name} (empty)")
-                    skipped += 1
-                    continue
-
-                dataset.append({
-                    "name": full_name,
-                    "scene": scene
-                })
-                processed += 1
-                print(f"  [OK] {full_name}")
+                if args.sliding_window:
+                    scenes = extract_all_windows(rows, tile_to_id, stride=args.stride, empty_char=empty_char)
+                    if not scenes:
+                        print(f"  [SKIP] {full_name} (empty)")
+                        skipped += 1
+                        continue
+                    for i, scene in enumerate(scenes):
+                        dataset.append({"name": f"{full_name}_{i}", "scene": scene})
+                    processed += len(scenes)
+                    print(f"  [OK] {full_name} ({len(scenes)} windows)")
+                else:
+                    scene = extract_best_window(rows, tile_to_id, empty_char=empty_char)
+                    if scene is None:
+                        print(f"  [SKIP] {full_name} (empty)")
+                        skipped += 1
+                        continue
+                    dataset.append({"name": full_name, "scene": scene})
+                    processed += 1
+                    print(f"  [OK] {full_name}")
 
             except Exception as e:
                 print(f"  [ERROR] Failed processing {full_name}: {e}")
