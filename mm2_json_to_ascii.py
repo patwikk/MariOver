@@ -478,6 +478,16 @@ def build_ascii_grid(level):
                         fill_tc = tc + 2 if right_slope else tc - 2
 
                     set_cell(fill_tc,tr,GROUND_CHAR)
+            elif obj_name == "Mushroom Platform":
+                col,row = obj_anchor(obj)
+                w,h = obj_tile_size(obj)
+                sc = col + w // 2
+                # stem: centered column, all rows below cap
+                for dy in range(h - 1):
+                    set_cell(sc, row + dy, char)
+                # cap: full width at top row
+                for dx in range(w):
+                    set_cell(col + dx, row + h - 1, char)
             else:
                 col,row = obj_anchor(obj)
                 w,h = obj_tile_size(obj)

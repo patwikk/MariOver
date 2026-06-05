@@ -737,15 +737,40 @@ class MM2Viewer(tk.Tk):
                     else:
                         if col >= max_tx or row >= max_ty:
                             continue
-                        px0 = col * ts + pad
-                        py1 = (max_ty - 1 - row) * ts + ts - pad
-                        px1 = (col + w) * ts - pad
-                        py0 = (max_ty - 1 - (row + h - 1)) * ts + pad
-                        self.canvas.create_rectangle(px0, py0, px1, py1,
-                                                     fill=color, outline=outline_col)
-                        if show_lbl:
-                            self.canvas.create_text((px0 + px1) // 2, (py0 + py1) // 2,
-                                                    text=char, fill="white", font=font_sz)
+                        if obj_name == "Mushroom Platform":
+                            sc = col + w // 2
+                            cr = row + h - 1
+                            # stem: 1 tile wide, from bottom up to (but not including) cap
+                            spx0 = sc * ts + pad
+                            spx1 = (sc + 1) * ts - pad
+                            spy0 = (max_ty - 1 - cr) * ts + ts - pad  # bottom of stem = just below cap
+                            spy1 = (max_ty - 1 - row) * ts + ts - pad  # bottom of bounding box
+                            if spy0 < spy1:  # only draw stem if h > 1
+                                self.canvas.create_rectangle(spx0, spy0, spx1, spy1,
+                                                             fill=color, outline=outline_col)
+                                if show_lbl:
+                                    self.canvas.create_text((spx0 + spx1) // 2, (spy0 + spy1) // 2,
+                                                            text=char, fill="white", font=font_sz)
+                            # cap: full width at top row
+                            cpx0 = col * ts + pad
+                            cpx1 = (col + w) * ts - pad
+                            cpy0 = (max_ty - 1 - cr) * ts + pad
+                            cpy1 = (max_ty - 1 - cr) * ts + ts - pad
+                            self.canvas.create_rectangle(cpx0, cpy0, cpx1, cpy1,
+                                                         fill=color, outline=outline_col)
+                            if show_lbl:
+                                self.canvas.create_text((cpx0 + cpx1) // 2, (cpy0 + cpy1) // 2,
+                                                        text=char, fill="white", font=font_sz)
+                        else:
+                            px0 = col * ts + pad
+                            py1 = (max_ty - 1 - row) * ts + ts - pad
+                            px1 = (col + w) * ts - pad
+                            py0 = (max_ty - 1 - (row + h - 1)) * ts + pad
+                            self.canvas.create_rectangle(px0, py0, px1, py1,
+                                                         fill=color, outline=outline_col)
+                            if show_lbl:
+                                self.canvas.create_text((px0 + px1) // 2, (py0 + py1) // 2,
+                                                        text=char, fill="white", font=font_sz)
 
         self.info_lbl.config(
             text=f"[{self.current_idx + 1}/{len(self.levels)}]  {name}  |  "
@@ -798,6 +823,14 @@ class MM2Viewer(tk.Tk):
                             fill_tc = tc + 2 if right_slope else tc - 2
                             set_cell(fill_tc, tr, GROUND_CHAR)
 
+                elif obj_name == "Mushroom Platform":
+                    sc = col + w // 2
+                    # stem: centered column, all rows below cap
+                    for dy in range(h - 1):
+                        set_cell(sc, row + dy, char)
+                    # cap: full width at top row
+                    for dx in range(w):
+                        set_cell(col + dx, row + h - 1, char)
                 else:
                     for dx in range(w):
                         for dy in range(h):
