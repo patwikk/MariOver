@@ -10,5 +10,5 @@ MARIO_WIDTH = 20
 MARIO_TILE_PIXEL_DIM = 16
 MARIO_TILE_COUNT = 13
 
-MARIO_TILESET = 'mario_tileset.json'
+MARIO_TILESET = 'mm2_tileset_full.json'
 
