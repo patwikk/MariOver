@@ -17,7 +17,13 @@ Coordinate system
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import json, sys, os, math
+import json, sys, os, math, re
+
+try:
+    from PIL import Image, ImageDraw, ImageTk
+    _PIL_OK = True
+except ImportError:
+    _PIL_OK = False
 
 # ---------------------------------------------------------------------------
 # Object metadata: name → (char, color, category)
@@ -187,6 +193,63 @@ CAT_COLORS = {
     CAT_DECO:     "#88BB88",
     CAT_OTHER:    "#AAAAAA",
 }
+
+# ---------------------------------------------------------------------------
+# Sprite support
+# ---------------------------------------------------------------------------
+# Maps display names (keys of OBJ_META) to the game's internal object ID.
+# These IDs correspond to OBJ_N in LevelData.hpp where N * 32768 = enum value.
+NAME_TO_GAME_ID = {
+    "Ground": 7,    "Block": 4,         "Hard Block": 6,     "? Block": 5,
+    "Hidden Block": 29, "Note Block": 23, "Donut Block": 21,  "Ice Block": 63,
+    "P Block": 79,  "ON/OFF Block": 99, "Dotted-Line Block": 100,
+    "Blinking Block": 108, "Spike Block": 110, "Crate": 112,  "Stone": 75,
+    "Goal Ground": 26, "Starting Brick": 37, "Castle Bridge": 49,
+    "Tree": 106,    "Slight Slope": 87, "Steep Slope": 88,
+    "Pipe": 9,      "Door": 55,         "Warp Box": 97,       "Key": 95,
+    "Checkpoint Flag": 90, "Goal": 27,  "Clear Pipe": 93,
+    "Goomba": 0,    "Koopa": 1,         "Piranha Plant": 2,   "Hammer Bro": 3,
+    "Thwomp": 12,   "Bob-omb": 15,      "Spiny": 25,          "Buzzy Beetle": 28,
+    "Lakitu": 30,   "Lakitu's Cloud": 31, "Banzai Bill": 32,
+    "Bullet Bill Blaster": 13, "Magikoopa": 39, "Spike Top": 40,
+    "Boo": 41,      "Bowser": 62,       "Bowser Jr.": 98,     "Chain Chomp": 61,
+    "Cheep Cheep": 56, "Blooper": 48,   "Wiggler": 52,        "Pokey": 78,
+    "Piranha Creeper": 107, "Porcupuffer": 114, "Fish Bone": 103,
+    "Lava Bubble": 60, "Rocky Wrench": 58, "Muncher": 57,
+    "Ant Trooper": 96, "Monty Mole": 102, "Mechakoopa": 111,  "Boom Boom": 77,
+    "Dry Bones": 46, "Skipsqueak": 51, "Stingby": 65,         "Angry Sun": 104,
+    "Charvaargh": 86, "Bully": 117,
+    "Lemmy": 120,   "Morton": 121,      "Larry": 122,         "Wendy": 123,
+    "Iggy": 124,    "Roy": 125,         "Ludwig": 126,
+    "Coin": 8,      "Red Coin": 92,     "Large Coin": 70,     "1-Up Mushroom": 33,
+    "Fire Flower": 34, "Super Star": 35, "Super Mushroom": 20, "Big Mushroom": 44,
+    "SMB2 Mushroom": 81, "Super Hammer": 116, "P Switch": 18, "POW Block": 19,
+    "Spring": 10,   "Goomba's Shoe": 45, "Cannon Box": 127,  "Propeller Box": 128,
+    "Goomba Mask": 129, "Bullet Bill Mask": 130, "Red POW Box": 131,
+    "Lift": 11,     "Mushroom Platform": 14, "Semisolid Platform": 16,
+    "Bridge": 17,   "Lava Lift": 36,    "Snake Block": 84,    "Track Block": 85,
+    "Conveyor Belt": 94, "Fast Conveyor Belt": 53, "Sprint Platform": 80,
+    "Seesaw": 91,   "Swinging Claw": 105, "ON/OFF Trampoline": 132,
+    "Mushroom Trampoline": 113, "Jumping Machine": 50,
+    "Half-Collision Platform": 71, "Donut": 82,
+    "Fire Bar": 24, "Saw": 68,          "Burner": 54,         "Spikes": 43,
+    "Spike Ball": 74, "Skewer": 83,     "Twister": 76,        "Icicle": 118,
+    "Cloud": 22,    "Vine": 64,         "Water Marker": 101,  "Arrow": 66,
+    "One-Way Wall": 67, "Reel Camera": 89, "Sound Effect": 109,
+    "Player": 69,   "Clown Car": 42,    "Koopa Clown Car": 72, "Track": 59,
+    "Starting Arrow": 38, "Cannon": 47, "! Block": 119,
+}
+
+# Normalise various gamestyle representations → LevelData.hpp enum name
+_GS_NORM = {
+    "smb1": "SMB1", "smb 1": "SMB1", "smb_1": "SMB1",
+    "smb3": "SMB3", "smb 3": "SMB3", "smb_3": "SMB3",
+    "smw":  "SMW",
+    "nsmbu":"NSMBU",
+    "sm3dw":"SM3DW", "sm3d world": "SM3DW",
+}
+_GS_INT = {12621: "SMB1", 13133: "SMB3", 22349: "SMW", 21847: "NSMBU", 22323: "SM3DW"}
+
 
 def get_meta(name: str):
     return OBJ_META.get(name, OBJ_META["_unknown"])
@@ -381,10 +444,18 @@ class MM2Viewer(tk.Tk):
         self.show_grid    = tk.BooleanVar(value=True)
         self.show_labels  = tk.BooleanVar(value=True)
         self.ascii_mode   = tk.BooleanVar(value=False)
+        self.sprite_mode  = tk.BooleanVar(value=False)
         self._cat_vars    = {}
         self._tooltip_win = None
 
+        # Sprite rendering state
+        self._sprite_map  = None   # {(obj_enum_name, gs_name): (x, y, w, h)}
+        self._sheet       = None   # PIL Image of spritesheet
+        self._spr_cache   = {}     # {(name, gs, w_px, h_px): PIL Image | None}
+        self._photo_ref   = None   # keep PhotoImage alive
+
         self._build_ui()
+        self._load_sprites()
 
     # ------------------------------------------------------------------ UI --
     def _build_ui(self):
@@ -404,6 +475,9 @@ class MM2Viewer(tk.Tk):
         tk.Scale(tb, from_=6, to=40, orient=tk.HORIZONTAL, variable=self.zoom_var,
                  command=lambda _: self._on_zoom(), showvalue=True, length=120).pack(side=tk.LEFT)
 
+        ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        tk.Checkbutton(tb, text="Sprites", variable=self.sprite_mode,
+                       command=self._redraw).pack(side=tk.LEFT, padx=4)
         ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         tk.Checkbutton(tb, text="ASCII mode", variable=self.ascii_mode,
                        command=self._redraw).pack(side=tk.LEFT, padx=4)
@@ -611,6 +685,7 @@ class MM2Viewer(tk.Tk):
 
     def _on_zoom(self):
         self.tile_size = self.zoom_var.get()
+        self._spr_cache.clear()
         self._redraw()
 
     def _active_cats(self):
@@ -618,6 +693,126 @@ class MM2Viewer(tk.Tk):
 
     # --------------------------------------------------------------- drawing --
 
+    def _load_sprites(self):
+        if not _PIL_OK:
+            return
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        hpp_path   = os.path.join(script_dir, "LevelData.hpp")
+        sheet_path = os.path.join(script_dir, "img", "spritesheet.png")
+        if not (os.path.exists(hpp_path) and os.path.exists(sheet_path)):
+            return
+        with open(hpp_path, "r") as fh:
+            hpp = fh.read()
+        # Parse ObjectLocation: { OBJ_xxx | GS_yyy, { x, y, w, h } }
+        pat = re.compile(
+            r'\{\s*(\w+)\s*\|\s*(\w+)\s*,\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}\s*\}'
+        )
+        smap = {}
+        for m in pat.finditer(hpp):
+            smap[(m.group(1), m.group(2))] = (
+                int(m.group(3)), int(m.group(4)),
+                int(m.group(5)), int(m.group(6)),
+            )
+        self._sprite_map = smap
+        self._sheet = Image.open(sheet_path).convert("RGBA")
+
+    def _resolve_gs(self, raw) -> str:
+        if isinstance(raw, int):
+            return _GS_INT.get(raw, "NSMBU")
+        s = str(raw).strip().lower()
+        return _GS_NORM.get(s, _GS_NORM.get(s.replace(" ", ""), "NSMBU"))
+
+    def _get_sprite(self, obj_name: str, gs: str, w_px: int, h_px: int):
+        """Return a scaled RGBA PIL Image for obj_name in gamestyle gs, or None."""
+        if not self._sprite_map or not self._sheet:
+            return None
+        game_id = NAME_TO_GAME_ID.get(obj_name)
+        if game_id is None:
+            return None
+        key = (obj_name, gs, w_px, h_px)
+        if key in self._spr_cache:
+            return self._spr_cache[key]
+        # Try base variant then A variant
+        coords = None
+        for enum_name in (f"OBJ_{game_id}", f"OBJ_{game_id}A"):
+            coords = self._sprite_map.get((enum_name, gs))
+            if coords:
+                break
+        if not coords:
+            self._spr_cache[key] = None
+            return None
+        sx, sy, sw, sh = coords
+        crop = self._sheet.crop((sx, sy, sx + sw, sy + sh))
+        scaled = crop.resize((w_px, h_px), Image.NEAREST)
+        self._spr_cache[key] = scaled
+        return scaled
+
+    def _render_sprite_image(self, lvl) -> "Image.Image":
+        """Compose the full level into a PIL RGBA image using sprite data."""
+        ts       = self.tile_size
+        max_tx, max_ty = self._grid_bounds(lvl)
+        W, H     = max_tx * ts, max_ty * ts
+        gs       = self._resolve_gs(lvl.get("gamestyle", ""))
+        active   = self._active_cats()
+        objects  = lvl.get("objects", [])
+
+        img  = Image.new("RGBA", (W, H), (92, 148, 252, 255))   # sky blue
+        draw = ImageDraw.Draw(img)
+
+        BG_TYPES = {"Semisolid Platform", "Mushroom Platform"}
+
+        for pass_n in range(2):
+            for obj in objects:
+                name   = obj.get("name", "_unknown")
+                is_bg  = name in BG_TYPES
+                if pass_n == 0 and not is_bg: continue
+                if pass_n == 1 and is_bg:     continue
+
+                _, color, cat = get_meta(name)
+                if cat not in active:
+                    continue
+
+                col, row = obj_anchor(obj)
+                w,   h   = obj_tile_size(obj)
+
+                # Slopes: draw one sprite tile per slope cell
+                if name in _SLOPE_NAMES:
+                    for tc, tr in slope_tiles(obj):
+                        if tc < 0 or tc >= max_tx or tr < 0 or tr >= max_ty:
+                            continue
+                        px0 = tc * ts
+                        py0 = (max_ty - tr - 1) * ts
+                        spr = self._get_sprite(name, gs, ts, ts)
+                        if spr:
+                            img.paste(spr, (px0, py0), spr)
+                        else:
+                            r_, g_, b_ = int(color[1:3],16), int(color[3:5],16), int(color[5:7],16)
+                            draw.rectangle([px0, py0, px0+ts-1, py0+ts-1], fill=(r_, g_, b_))
+                    continue
+
+                # Compute pixel rect (y-flipped)
+                px0 = col * ts
+                py0 = (max_ty - row - h) * ts
+                px1 = px0 + w * ts
+                py1 = py0 + h * ts
+
+                # Skip fully off-canvas objects
+                if px1 <= 0 or py1 <= 0 or px0 >= W or py0 >= H:
+                    continue
+
+                # Clamp to canvas
+                cx0, cy0 = max(0, px0), max(0, py0)
+                cx1, cy1 = min(W, px1), min(H, py1)
+                w_px, h_px = cx1 - cx0, cy1 - cy0
+
+                spr = self._get_sprite(name, gs, w_px, h_px)
+                if spr:
+                    img.paste(spr, (cx0, cy0), spr)
+                else:
+                    r_, g_, b_ = int(color[1:3],16), int(color[3:5],16), int(color[5:7],16)
+                    draw.rectangle([cx0, cy0, cx1-1, cy1-1], fill=(r_, g_, b_, 220))
+
+        return img
 
     def _grid_bounds(self, lvl):
         """Return (max_tx, max_ty) matching the C++ H = BorT/16, W = BorR/16."""
@@ -658,6 +853,25 @@ class MM2Viewer(tk.Tk):
         W = max_tx * ts
         H = max_ty * ts
         self.canvas.config(scrollregion=(0, 0, W, H))
+
+        # ---- Sprite mode ----
+        if self.sprite_mode.get() and _PIL_OK and self._sprite_map:
+            pil_img = self._render_sprite_image(lvl)
+            photo   = ImageTk.PhotoImage(pil_img)
+            self.canvas.create_image(0, 0, image=photo, anchor="nw")
+            self._photo_ref = photo          # prevent garbage collection
+            if self.show_grid.get():
+                gc = "#555555" if ts > 10 else "#333333"
+                for col in range(max_tx + 1):
+                    self.canvas.create_line(col*ts, 0, col*ts, H, fill=gc)
+                for row in range(max_ty + 1):
+                    self.canvas.create_line(0, row*ts, W, row*ts, fill=gc)
+            self.info_lbl.config(
+                text=f"[{self.current_idx+1}/{len(self.levels)}]  {name}  "
+                     f"[Sprites | style={lvl.get('gamestyle','?')}]  "
+                     f"grid {max_tx}×{max_ty}")
+            return
+
         self.canvas.create_rectangle(0, 0, W, H, fill="#5C94FC", outline="")
 
         # grid lines
