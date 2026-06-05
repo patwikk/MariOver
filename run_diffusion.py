@@ -4,7 +4,10 @@ import os
 import torch
 import numpy as np
 import random
-from create_level_json_data import load_tileset, MM2_TILESET, MM2_EXTRA_TILE
+from level_dataset import visualize_samples, samples_to_scenes
+from create_ascii_captions import save_level_data
+from create_level_json_data import load_tileset, MM2_EXTRA_TILE
+import util.common_settings as common_settings
 from models.pipeline_loader import get_pipeline
 
 
@@ -14,10 +17,19 @@ def parse_args():
     parser.add_argument("--num_samples", type=int, default=10, help="Number of levels to generate")
     parser.add_argument("--output_dir", type=str, default="generated_levels", help="Directory to save outputs")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--inference_steps", type=int, default=50, help="Number of denoising steps")
+    parser.add_argument("--inference_steps", type=int, default=common_settings.NUM_INFERENCE_STEPS, help="Number of denoising steps")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size for generation")
-    parser.add_argument("--tileset", type=str, default=MM2_TILESET, help="Path to MM2 tileset JSON")
+    parser.add_argument("--save_as_json", action="store_true", help="Save generated levels as JSON")
     parser.add_argument("--level_width", type=int, default=None, help="Override model width in tiles")
+    parser.add_argument(
+        "--output_format",
+        type=str,
+        default="ascii",
+        choices=["ascii", "image", "both"],
+        help="Output format: ascii text files, tile images, or both",
+    )
+    parser.add_argument("--tileset", default="smb.json", help="Path to tileset JSON")
+    parser.add_argument("--describe_absence", action="store_true", default=False, help="Caption mentions when tiles are entirely absent")
     return parser.parse_args()
 
 
@@ -76,6 +88,7 @@ def generate_levels(args):
 
     total_samples = args.num_samples
     num_batches = (total_samples + args.batch_size - 1) // args.batch_size
+    all_samples = []
 
     for batch_idx in range(num_batches):
         current_batch_size = min(args.batch_size, total_samples - batch_idx * args.batch_size)
@@ -91,12 +104,26 @@ def generate_levels(args):
                 width=scene_width,
             ).images
 
+        all_samples.append(samples)
         start_index = batch_idx * args.batch_size
-        ascii_levels = samples_to_ascii(samples, id_to_char)
-        save_ascii_levels(ascii_levels, args.output_dir, start_index)
-        print(f"  Saved {len(ascii_levels)} levels to {args.output_dir}")
 
+        if args.output_format in ("ascii", "both"):
+            ascii_levels = samples_to_ascii(samples, id_to_char)
+            save_ascii_levels(ascii_levels, args.output_dir, start_index)
+            print(f"  Saved {len(ascii_levels)} ASCII levels to {args.output_dir}")
+
+        if args.output_format in ("image", "both"):
+            visualize_samples(samples, args.output_dir, True, start_index)
+            print(f"  Saved {current_batch_size} level images to {args.output_dir}")
+
+    all_samples = torch.cat(all_samples, dim=0)[:total_samples]
     print(f"Done. Generated {total_samples} levels.")
+
+    if args.save_as_json:
+        scenes = samples_to_scenes(all_samples)
+        out_path = os.path.join(args.output_dir, "all_levels.json")
+        save_level_data(scenes, args.tileset, out_path, False, args.describe_absence, exclude_broken=False)
+        print(f"Saved {len(scenes)} captioned scenes to {out_path}")
 
 
 if __name__ == "__main__":

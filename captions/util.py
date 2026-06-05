@@ -43,7 +43,7 @@ def analyze_floor(scene, id_to_char, tile_descriptors, describe_absence):
         )
     )
     passable_count = sum(
-        1 for tile in last_row if "passable" in tile_descriptors.get(id_to_char[tile], [])
+        1 for tile in last_row if "passable" in tile_descriptors.get(id_to_char.get(tile, '_'), [])
     )
 
     if solid_count == WIDTH:
@@ -58,38 +58,29 @@ def analyze_floor(scene, id_to_char, tile_descriptors, describe_absence):
         gaps = 0
         in_gap = False
         for tile in last_row:
+            char = id_to_char.get(tile, '_')
+            descs = tile_descriptors.get(char, {'passable'})
             # Enemies are also a gap since they immediately fall into the gap
-            if "passable" in tile_descriptors.get(id_to_char[tile], []) or "enemy" in tile_descriptors.get(id_to_char[tile], []):
+            if "passable" in descs or "enemy" in descs:
                 if not in_gap:
                     gaps += 1
                     in_gap = True
-            elif "solid" in tile_descriptors.get(id_to_char[tile], []):
-                in_gap = False
             else:
-                print("error")
-                print(tile)
-                print(id_to_char[tile])
-                print(tile_descriptors)
-                print(tile_descriptors.get(id_to_char[tile], []))
-                raise ValueError("Every tile should be passable, solid, or enemy")
+                in_gap = False
         return f"floor with {describe_quantity(gaps) if coarse_counts else gaps} gap" + ("s" if pluralize and gaps != 1 else "")
     else:
         # Count contiguous groups of solid tiles
         chunks = 0
         in_chunk = False
         for tile in last_row:
-            if "solid" in tile_descriptors.get(id_to_char[tile], []):
+            char = id_to_char.get(tile, '_')
+            descs = tile_descriptors.get(char, {'passable'})
+            if "solid" in descs:
                 if not in_chunk:
                     chunks += 1
                     in_chunk = True
-            elif "passable" in tile_descriptors.get(id_to_char[tile], []) or "enemy" in tile_descriptors.get(id_to_char[tile], []):
-                in_chunk = False
             else:
-                print("error")
-                print(tile)
-                print(tile_descriptors)
-                print(tile_descriptors.get(tile, []))
-                raise ValueError("Every tile should be either passable or solid")
+                in_chunk = False
         return f"giant gap with {describe_quantity(chunks) if coarse_counts else chunks} chunk"+("s" if pluralize and chunks != 1 else "")+" of floor"
 
 def count_in_scene(scene, tiles, exclude=set()):
@@ -130,8 +121,8 @@ def analyze_ceiling(scene, id_to_char, tile_descriptors, describe_absence, ceili
     WIDTH = len(scene[0])
 
     row = scene[ceiling_row]
-    solid_count = sum(1 for tile in row if "solid" in tile_descriptors.get(id_to_char[tile], []))
-    
+    solid_count = sum(1 for tile in row if "solid" in tile_descriptors.get(id_to_char.get(tile, '_'), []))
+
     if solid_count == WIDTH:
         return " full ceiling."
     elif solid_count > WIDTH//2:
@@ -139,8 +130,10 @@ def analyze_ceiling(scene, id_to_char, tile_descriptors, describe_absence, ceili
         gaps = 0
         in_gap = False
         for tile in row:
+            char = id_to_char.get(tile, '_')
+            descs = tile_descriptors.get(char, {'passable'})
             # Enemies are also a gap since they immediately fall into the gap, but they are marked as "moving" and not "passable"
-            if "passable" in tile_descriptors.get(id_to_char[tile], []) or "moving" in tile_descriptors.get(id_to_char[tile], []):
+            if "passable" in descs or "moving" in descs:
                 if not in_gap:
                     gaps += 1
                     in_gap = True
@@ -180,6 +173,22 @@ def extract_tileset(tileset_path):
         tile_descriptors = get_tile_descriptors(tileset)
         #print(f"tile_descriptors: {tile_descriptors}")
 
+        # The '_' padding tile is added to id_to_char but get_tile_descriptors only
+        # reads tileset['tiles'], which never includes '_'. Register it as passable so
+        # analyze_floor and similar functions don't raise on void/padding tiles.
+        tile_descriptors.setdefault('_', {'passable'})
+
+        # Add negative sentinel IDs for any SMB chars missing from this tileset so
+        # callers in create_ascii_captions.py don't KeyError.  Negative IDs never
+        # appear in real scene data (tiles are 0-indexed), so all pipe/cannon/enemy
+        # detection simply evaluates to False for tilesets that lack those tiles.
+        _SMB_CHARS = ('<', '>', '[', ']', 'b', 'B', 'E', 'Q', '?', 'o', 'X', 'S', '-')
+        sentinel = -1
+        for ch in _SMB_CHARS:
+            if ch not in char_to_id:
+                char_to_id[ch] = sentinel
+                sentinel -= 1
+
     return tile_chars, id_to_char, char_to_id, tile_descriptors
 
 def flood_fill(scene, visited, start_row, start_col, id_to_char, tile_descriptors, excluded, pipes=False, target_descriptor=None):
@@ -191,7 +200,8 @@ def flood_fill(scene, visited, start_row, start_col, id_to_char, tile_descriptor
         if (row, col) in visited or (row, col) in excluded:
             continue
         tile = scene[row][col]
-        descriptors = tile_descriptors.get(id_to_char[tile], [])
+        char = id_to_char.get(tile, '_')
+        descriptors = tile_descriptors.get(char, {'passable'})
         # Use target_descriptor if provided, otherwise default to old solid/pipe logic
         if target_descriptor is not None:
             if target_descriptor not in descriptors:
@@ -206,9 +216,9 @@ def flood_fill(scene, visited, start_row, start_col, id_to_char, tile_descriptor
         # Check neighbors
         for d_row, d_col in [(-1,0), (1,0), (0,-1), (0,1)]:
             # Weird special case for adjacent pipes
-            if (id_to_char[tile] == '>' or id_to_char[tile] == ']') and d_col == 1: # if on the right edge of a pipe
+            if (char == '>' or char == ']') and d_col == 1:
                 continue # Don't go right if on the right edge of a pipe
-            if (id_to_char[tile] == '<' or id_to_char[tile] == '[') and d_col == -1: # if on the left edge of a pipe
+            if (char == '<' or char == '[') and d_col == -1:
                 continue # Don't go left if on the left edge of a pipe
 
             n_row, n_col = row + d_row, col + d_col
