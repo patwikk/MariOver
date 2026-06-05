@@ -3,22 +3,14 @@ import torch
 import random
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-try:
-    from tokenizer import Tokenizer
-except ImportError:
-    Tokenizer = None
+from tokenizer import Tokenizer
 import os
 import matplotlib.pyplot as plt
 import matplotlib
 from torch.utils.data import DataLoader
 import io
 from PIL import Image
-try:
-    from captions.caption_match import TOPIC_KEYWORDS, BROKEN_TOPICS, KEYWORD_TO_NEGATED_PLURAL
-except ImportError:
-    TOPIC_KEYWORDS = []
-    BROKEN_TOPICS = []
-    KEYWORD_TO_NEGATED_PLURAL = {}
+from captions.caption_match import TOPIC_KEYWORDS, BROKEN_TOPICS, KEYWORD_TO_NEGATED_PLURAL
 import numpy as np
 import util.common_settings as common_settings
 import re
@@ -576,7 +568,7 @@ class LevelDataset(Dataset):
             limit (int): restrict dataset to this size if not -1
             num_tiles (int): Number of different tile types for one-hot encoding
         """
-        assert mode in ["text", "diff_text", "diff"], "Mode must be 'text', 'diff_text', or 'diff'."
+        assert mode in ["text", "diff_text"], "Mode must be 'text' or 'diff_text'."
 
         self.shuffle = shuffle
         self.tokenizer = tokenizer
@@ -607,7 +599,7 @@ class LevelDataset(Dataset):
         print(f"Training samples: {len(self.data)}")
 
         # Determine padding length (if not provided)
-        if self.max_length is None and self.mode != "diff":
+        if self.tokenizer and self.max_length is None:
             # Add 5 just in case
             self.max_length = max(len(caption.replace(".", " .").split()) for caption in (item["caption"] for item in self.data)) + 5
 
@@ -616,7 +608,7 @@ class LevelDataset(Dataset):
             random.shuffle(self.data)
 
         remove_upside_down_pipes = False
-        if self.negative_captions and self.mode != "diff":
+        if self.negative_captions:
             # If the captions do not contain upside down pipes, then the negative captions
             # should never say there are no upside down pipes too.
             remove_upside_down_pipes = True
@@ -628,8 +620,7 @@ class LevelDataset(Dataset):
                     break
 
         self.remove_upside_down_pipes = remove_upside_down_pipes
-        if self.mode != "diff":
-            print("remove_upside_down_pipes:", self.remove_upside_down_pipes)
+        print("remove_upside_down_pipes:", self.remove_upside_down_pipes)
 
     def _augment_caption(self, caption):
         """Shuffles period-separated phrases in the caption."""
@@ -685,19 +676,10 @@ class LevelDataset(Dataset):
               scene_tensor is one-hot encoded with shape (num_tiles, height, width)
         """
         sample = self.data[idx]
-
-        if self.mode == "diff":
-            scene_tensor = torch.tensor(sample["scene"], dtype=torch.long)
-            if self.random_flip and random.choice([True, False]):
-                scene_tensor = self._flip_scene(scene_tensor)
-            if self.block_embeddings is not None:
-                one_hot_scene = torch.stack([self.block_embeddings[tile_id] for tile_id in scene_tensor])
-            else:
-                one_hot_scene = F.one_hot(scene_tensor, num_classes=self.num_tiles).float()
-            one_hot_scene = one_hot_scene.permute(2, 0, 1)
-            return one_hot_scene,
-
-        augmented_caption = self._augment_caption(sample["caption"])
+        if "caption" in sample:
+            augmented_caption = self._augment_caption(sample["caption"])
+        else:
+            augmented_caption = ""
 
         negative_caption = ""
         if self.negative_captions:

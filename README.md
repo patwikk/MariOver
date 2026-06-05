@@ -21,6 +21,9 @@ python build_dataset.py --keyword (keyword) --max_levels (amount of levels to lo
 **Creating a dataset with captions:**
 python build_dataset.py --keyword (keyword) --max_levels (amount of levels to look at) --output (dataset_name).json --caption --exclude_upside_down_pipes --seed 0
 
+**Train unconditional diffusion model:**
+python train_diffusion.py --json datasets/(dataset file) --game Mario --output_dir (output_folder)
+
 **Train captioning model:** 
 python train_mlm.py --epochs 300 --save_checkpoints --json datasets\(dataset_name)_captioned.json --val_json datasets\(dataset_name)_captioned-validate.json --test_json datasets\d(dataset_name)_captioned-test.json --pkl datasets\(dataset_name)_Tokenizer-regular.pkl --output_dir dataset-MLM
 

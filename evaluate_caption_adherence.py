@@ -10,11 +10,8 @@ import json
 from models.fdm_pipeline import FDMPipeline
 from level_dataset import visualize_samples, convert_to_level_format, samples_to_scenes
 from create_ascii_captions import assign_caption, save_level_data
-from LR_create_ascii_captions import assign_caption as lr_assign_caption
-from LR_create_ascii_captions import save_level_data as lr_save_level_data
 from captions.util import extract_tileset 
 from captions.caption_match import compare_captions
-from captions.LR_caption_match import compare_captions as lr_compare_captions
 from tqdm.auto import tqdm
 import util.common_settings as common_settings
 from util.plotter import Plotter  
@@ -61,11 +58,6 @@ def main():
             height = common_settings.MARIO_HEIGHT
             width = common_settings.MARIO_WIDTH
             path_to_json = args.json
-    elif args.num_tiles == common_settings.LR_TILE_COUNT:
-            tileset = common_settings.LR_TILESET
-            height = common_settings.LR_HEIGHT
-            width = common_settings.LR_WIDTH
-            path_to_json = "datasets/LR_LevelsAndCaptions-regular.json"
 
 
     if not args.compare_checkpoints:
@@ -123,20 +115,10 @@ def main():
         if args.save_image_samples:
             if args.num_tiles == common_settings.MARIO_TILE_COUNT:
                 visualize_samples(all_samples, args.output_dir, prompts=all_prompts)
-            elif args.num_tiles == common_settings.LR_TILE_COUNT:
-                visualize_samples(all_samples, args.output_dir, prompts=all_prompts, game='LR')
-
         if args.save_as_json:
             scenes = samples_to_scenes(all_samples)
             if args.num_tiles == common_settings.MARIO_TILE_COUNT:
                 save_level_data(scenes, args.tileset, os.path.join(args.output_dir, "all_levels.json"), False, args.describe_absence, exclude_broken=False, prompts=all_prompts)
-            elif args.num_tiles == common_settings.LR_TILE_COUNT:
-                tileset = common_settings.LR_TILESET
-                scenes = [
-                            [[tile % common_settings.LR_TILE_COUNT for tile in row] for row in scene]
-                            for scene in scenes
-                        ]
-                lr_save_level_data(scenes, tileset, os.path.join(args.output_dir, "all_levels.json"), False, args.describe_absence)
 
 
 def track_caption_adherence(args, device, dataloader, id_to_char, char_to_id, tile_descriptors, using_unet_pipe=True):
@@ -146,11 +128,6 @@ def track_caption_adherence(args, device, dataloader, id_to_char, char_to_id, ti
             height = common_settings.MARIO_HEIGHT
             width = common_settings.MARIO_WIDTH
             path_to_json = args.json
-    elif args.num_tiles == common_settings.LR_TILE_COUNT:
-            tileset = common_settings.LR_TILESET
-            height = common_settings.LR_HEIGHT
-            width = common_settings.LR_WIDTH
-            path_to_json = "datasets/LR_LevelsAndCaptions-regular.json"
 
     checkpoint_dirs = [
         (int(d.split("-")[-1]), os.path.join(args.model_path, d))
@@ -302,17 +279,10 @@ def calculate_caption_score_and_samples(device, pipe, dataloader, inference_step
                 #print("first sample_indices", sample_indices[0])
                 scene = sample_indices[0].tolist()  # Always just one scene: (1,16,16)
                 #quit()
-                if height == common_settings.LR_HEIGHT:
-                    scene = [[tile % common_settings.LR_TILE_COUNT for tile in s] for s in scene]
-                    actual_caption = lr_assign_caption(scene, id_to_char, char_to_id, tile_descriptors, False, describe_absence)
-                else:
-                    actual_caption = assign_caption(scene, id_to_char, char_to_id, tile_descriptors, False, describe_absence)
+                actual_caption = assign_caption(scene, id_to_char, char_to_id, tile_descriptors, False, describe_absence)
 
                 if output: print(f"\t{caption}")
-                if height == common_settings.LR_HEIGHT:
-                    compare_score = lr_compare_captions(caption, actual_caption)
-                else:
-                    compare_score = compare_captions(caption, actual_caption)
+                compare_score = compare_captions(caption, actual_caption)
 
                 if output: print(f"\tcompare_score: {compare_score}")
                 compare_all_scores.append(compare_score)
