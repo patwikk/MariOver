@@ -162,17 +162,16 @@ def analyze_ceiling(scene, id_to_char, tile_descriptors, describe_absence, ceili
 
 def extract_tileset(tileset_path):
     # Load tileset
-    with open(tileset_path, "r") as f:
+    with open(tileset_path, "r", encoding="utf-8") as f:
         tileset = json.load(f)
         #print(f"tileset: {tileset}")
         if "MM" in tileset_path: #Clunky test that I'll likly change later to prevent sorting on the MegaMan data, because it doesn't expect it
-            tile_chars = tileset['tiles'].keys()
+            tile_chars = list(tileset['tiles'].keys())
         else: #Applies to lode runner/mario
             tile_chars = sorted(tileset['tiles'].keys())
-        # Wiggle room for the tileset to be a bit more flexible.
-        # However, this requires me to add some bogus tiles to the list.
-        # tile_chars.append('!') 
-        # tile_chars.append('*') 
+        # Mirror load_tileset: append the extra/padding tile if not already present
+        if "_" not in tile_chars:
+            tile_chars = list(tile_chars) + ["_"]
         #print(f"tile_chars: {tile_chars}")
         id_to_char = {idx: char for idx, char in enumerate(tile_chars)}
         #print(f"id_to_char: {id_to_char}")

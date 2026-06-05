@@ -328,11 +328,47 @@ class TileViewer(tk.Tk):
                 self.dataset = [{'scene': item, 'caption': ''} for item in self.dataset]
 
             _, self.id_to_char, self.char_to_id, self.tile_descriptors = extract_tileset(tileset_path)
+            self.color_map = self._build_color_map()
             self.current_sample_idx = 0
             self.redraw()
         except Exception as e:
             print(f"Error loading files: {e}")
             raise e
+
+    def _build_color_map(self):
+        TAG_COLORS = [
+            ("empty",       (0.20, 0.30, 0.70)),
+            ("air",         (0.20, 0.30, 0.70)),
+            ("passable",    (0.70, 0.85, 1.00)),
+            ("spawn",       (0.00, 0.00, 0.90)),
+            ("goal",        (0.00, 0.90, 0.30)),
+            ("pipe",        (0.00, 0.50, 0.00)),
+            ("warp",        (0.10, 0.70, 0.20)),
+            ("door",        (0.10, 0.70, 0.20)),
+            ("enemy",       (0.90, 0.10, 0.10)),
+            ("damaging",    (0.90, 0.10, 0.10)),
+            ("hazard",      (1.00, 0.50, 0.00)),
+            ("collectable", (1.00, 0.85, 0.00)),
+            ("item",        (1.00, 0.85, 0.00)),
+            ("platform",    (0.30, 0.50, 0.90)),
+            ("terrain",     (0.50, 0.35, 0.10)),
+            ("solid",       (0.50, 0.35, 0.10)),
+            ("decoration",  (0.60, 0.60, 0.60)),
+        ]
+        base_colors = level_dataset.colors()
+        color_map = {}
+        for tile_id, char in self.id_to_char.items():
+            if tile_id < len(base_colors):
+                color_map[tile_id] = base_colors[tile_id]
+            else:
+                descriptors = self.tile_descriptors.get(char, set())
+                color = (0.80, 0.80, 0.80)
+                for tag, col in TAG_COLORS:
+                    if tag in descriptors:
+                        color = col
+                        break
+                color_map[tile_id] = color
+        return color_map
 
     def load_model(self):
         """Load a trained diffusion model."""
@@ -523,7 +559,8 @@ class TileViewer(tk.Tk):
             self.current_pil_image = None  # No image to save in non-image mode
             # Display as numeric/character grid
             font = ("Courier", self.font_size)
-            colors = level_dataset.colors()
+            color_map = getattr(self, 'color_map', None) or {}
+            base_colors = level_dataset.colors()
 
             HEIGHT = len(sample['scene'])
             WIDTH = len(sample['scene'][0])
@@ -531,8 +568,12 @@ class TileViewer(tk.Tk):
                 for x in range(WIDTH):
                     tile_id = sample['scene'][y][x]
                     text = str(tile_id) if self.show_ids.get() else self.id_to_char.get(tile_id, '?')
-                    # Convert (r, g, b) float tuple to hex color string
-                    r, g, b = colors[tile_id]
+                    if tile_id in color_map:
+                        r, g, b = color_map[tile_id]
+                    elif tile_id < len(base_colors):
+                        r, g, b = base_colors[tile_id]
+                    else:
+                        r, g, b = (0.80, 0.80, 0.80)
                     color_hex = f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
 
                     # Find all matching phrases for this coordinate

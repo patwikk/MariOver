@@ -139,6 +139,11 @@
         "Ö" : ["passable", "interactive", "track"],
         "×" : ["passable", "decoration", "starting arrow"],
         "Ø" : ["solid", "hazard", "shooter", "cannon"],
-        "Ù" : ["solid", "exclamation block"]
+        "Ù" : ["solid", "exclamation block"],
+
+        "↑" : ["solid", "pipe", "pipe direction up"],
+        "↓" : ["solid", "pipe", "pipe direction down"],
+        "←" : ["solid", "pipe", "pipe direction left"],
+        "→" : ["solid", "pipe", "pipe direction right"]
     }
 }

@@ -28,8 +28,8 @@ def load_tileset(path):
         chars.append(EXTRA_TILE)
     return {ch: idx for idx, ch in enumerate(chars)}
 
-def extract_best_window(rows, tile_to_id):
-    empty_id = tile_to_id.get("-", 0)
+def extract_best_window(rows, tile_to_id, empty_char="-"):
+    empty_id = tile_to_id.get(empty_char, 0)
     extra_id = tile_to_id.get(EXTRA_TILE, 0)
 
     height = len(rows)
@@ -39,8 +39,8 @@ def extract_best_window(rows, tile_to_id):
         return None
 
     pad_rows = max(0, WINDOW_H - height)
-    padded = ["-" * width] * pad_rows + list(rows)
-    padded = [r.ljust(width, "-") for r in padded]
+    padded = [empty_char * width] * pad_rows + list(rows)
+    padded = [r.ljust(width, empty_char) for r in padded]
 
     best_score = -1
     best_scene = None
@@ -156,6 +156,8 @@ def main():
                                help="Convert layout to VGLC structure (ascii_to_vglc.py).")
     convert_group.add_argument("--convert_to_extended", action="store_true",
                                help="Convert layout to extended tile format (mm2view_to_extended.py).")
+    convert_group.add_argument("--include_all", action="store_true",
+                               help="Brute-force mode: skip all converters and windowing, include every level as-is.")
     args = parser.parse_args()
 
     tile_to_id = load_tileset(args.tileset)
@@ -165,6 +167,8 @@ def main():
         converter_mod = load_converter("ascii_to_vglc.py", "ascii_to_vglc")
     elif args.convert_to_extended:
         converter_mod = load_converter("mm2view_to_extended.py", "mm2view_to_extended")
+    elif args.include_all:
+        print("Brute-force mode: all levels included without conversion or windowing.")
 
     input_files = collect_input_files(args.input_file)
     dataset = []
@@ -180,14 +184,24 @@ def main():
             # Prefix with the source filename so names stay unique across files
             full_name = f"{file_stem}/{name}" if len(input_files) > 1 else name
             try:
-                if converter_mod is not None:
+                if args.include_all:
+                    rows = [r.rstrip('\r\n') for r in rows]
+                    # Strip leading blank rows (raw MM2 ASCII sky is all spaces)
+                    while rows and not rows[0].strip():
+                        rows.pop(0)
+                    # Take the bottom WINDOW_H rows so ground is always included
+                    if len(rows) > WINDOW_H:
+                        rows = rows[-WINDOW_H:]
+                    scene = extract_best_window(rows, tile_to_id, empty_char=" ")
+                elif converter_mod is not None:
                     rows = converter_mod.convert_level(rows)
+                    scene = extract_best_window(rows, tile_to_id)
                 else:
                     rows = [r.rstrip('\r\n') for r in rows]
+                    scene = extract_best_window(rows, tile_to_id)
 
-                scene = extract_best_window(rows, tile_to_id)
                 if scene is None:
-                    print(f"  [SKIP] {full_name} (too narrow or empty)")
+                    print(f"  [SKIP] {full_name} (empty)")
                     skipped += 1
                     continue
 
@@ -212,3 +226,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#num_tiles = 138 for mm2_tileset_full
+#num_tiles = 
