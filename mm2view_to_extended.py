@@ -22,6 +22,11 @@ Output characters
     M   mushroom platform
     B   cannon top
     b   cannon bottom
+    =   bridge (passable bridge platform)
+    _   semisolid platform (pass-through from below)
+    W   stone block
+    F   fire flower
+    T   thwomp
 
     Upright pipe (↑ / |):
     <   pipe top-left        >   pipe top-right
@@ -57,7 +62,6 @@ MM2_GROUND = {
     "p",   # p block (togglable solid)
     "O",   # on/off block (togglable solid)
     "*",   # blinking block (togglable solid)
-    "·",   # bridge platform
     "»",   # conveyor belt
     "¼",   # fast conveyor belt
     "J",   # jumping machine
@@ -65,7 +69,6 @@ MM2_GROUND = {
     "É",   # skewer (solid moving hazard)
     "Ë",   # icicle
     "Ø",   # wall cannon (solid structure)
-    "S",   # stone
 }
 
 MM2_BREAKABLE      = {"B"}           # breakable brick → S
@@ -83,13 +86,18 @@ MM2_KOOPA          = {"K"}                    # koopa → K
 MM2_PIRANHA        = {"P", "e", ","}          # piranha flower / creeper / muncher → P
 MM2_SPIKE          = {"^", "Ç"}              # spike block, spikes → ^
 MM2_MUSHROOM_PLAT  = {"³"}                   # mushroom platform → M
+MM2_BRIDGE         = {"·"}                   # bridge → =
+MM2_SEMISOLID      = {"´", "Â"}             # semisolid / half-collision platform → _
+MM2_STONE          = {"S"}                   # stone block → W
+MM2_FIRE_FLOWER    = {"i"}                   # fire flower → F
 MM2_BREAKABLE_NB   = {"h", "d", "Ã"}         # hidden block, donut block, falling platform → N
 
 MM2_GOOMBA         = {"g"}                   # goomba → E (explicit so it's documented)
+MM2_THWOMP         = {"t"}                   # thwomp → T
 
 # All remaining enemies → E (generic fallback)
 MM2_ENEMIES_GENERIC = set(
-    "m t o s b L Z y < u X x @ ~ q w Y F % & r a n R ! 9 j + ¡ ; A v [ 1 2 3 4 5 6 7 µ"
+    "m o s b L Z y < u X x @ ~ q w Y F % & r a n R ! 9 j + ¡ ; A v [ 1 2 3 4 5 6 7 µ"
     .split()
 )
 
@@ -108,6 +116,11 @@ OUT_MUSHROOM = "M"
 OUT_BREAK_NB = "N"
 OUT_CANNON_T = "B"
 OUT_CANNON_B = "b"
+OUT_BRIDGE   = "="
+OUT_SEMISOLID= "_"
+OUT_STONE    = "W"
+OUT_FIRE_FL  = "F"
+OUT_THWOMP   = "T"
 PIPE_TOP_L   = "<"   # upright pipe cap
 PIPE_TOP_R   = ">"
 PIPE_BOT_L   = "["   # upright pipe body
@@ -201,6 +214,8 @@ def convert_cell(ch: str, grid: list[list[str]], row: int, col: int,
         return OUT_KOOPA
     if ch in MM2_PIRANHA:
         return OUT_PIRANHA
+    if ch in MM2_THWOMP:
+        return OUT_THWOMP
     if ch in MM2_GOOMBA or ch in MM2_ENEMIES_GENERIC:
         return OUT_ENEMY
 
@@ -227,6 +242,22 @@ def convert_cell(ch: str, grid: list[list[str]], row: int, col: int,
     # Mushroom platform
     if ch in MM2_MUSHROOM_PLAT:
         return OUT_MUSHROOM
+
+    # Bridge
+    if ch in MM2_BRIDGE:
+        return OUT_BRIDGE
+
+    # Semisolid / pass-through platform
+    if ch in MM2_SEMISOLID:
+        return OUT_SEMISOLID
+
+    # Stone block
+    if ch in MM2_STONE:
+        return OUT_STONE
+
+    # Fire flower
+    if ch in MM2_FIRE_FLOWER:
+        return OUT_FIRE_FL
 
     # Breakable non-brick blocks
     if ch in MM2_BREAKABLE_NB:

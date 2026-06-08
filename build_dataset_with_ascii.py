@@ -188,7 +188,10 @@ def main():
                         help="Step size (in tiles) between windows when --sliding_window is active. Default: 1.")
     args = parser.parse_args()
 
-    tile_to_id = load_tileset(args.tileset)
+    tileset_path = args.tileset
+    if args.convert_to_extended and tileset_path == os.path.join(HERE, "smb.json"):
+        tileset_path = os.path.join(HERE, "extended_tiles.json")
+    tile_to_id = load_tileset(tileset_path)
 
     converter_mod = None
     if args.convert_to_vglc:

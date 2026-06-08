@@ -24,7 +24,6 @@ TERRAIN & BLOCKS
 '/'          Slight Slope
 '\'          Steep Slope
 
-
 PIPES, DOORS & WARPS
 --------------------
 '|'          Pipe
@@ -38,7 +37,6 @@ PIPES, DOORS & WARPS
 '↓'          Pipe (pointing down)
 '←'          Pipe (pointing left)
 '→'          Pipe (pointing right)
-
 
 ENEMIES & BOSSES 
 -----------------------------------------------------------------------------
@@ -91,7 +89,6 @@ ENEMIES & BOSSES
 '7'   Ludwig von Koopa   - Koopaling boss
 'µ'   Goomba's Shoe      - giant shoe that an enemy can ride around in
 
-
 ITEMS, POWER-UPS & COLLECTABLES
 -------------------------------
 '¢'   Coin
@@ -113,7 +110,6 @@ ITEMS, POWER-UPS & COLLECTABLES
 '°'   Bullet Bill Mask (Mario costume / power-up)
 '²'   Red POW Box
 
-
 PLATFORMS & MOVING OBJECTS
 --------------------------
 '-'   Lift
@@ -134,7 +130,6 @@ PLATFORMS & MOVING OBJECTS
 'Â'   Half-Collision (Semisolid) Platform
 'Ã'   Donut Block Platform (falls after being stood on)
 
-
 HAZARDS (non-creature)
 ----------------------
 'Ä'   Fire Bar
@@ -146,7 +141,6 @@ HAZARDS (non-creature)
 'Ê'   Twister
 'Ë'   Icicle
 'Ø'   Cannon
-
 
 DECORATIONS, VEHICLES & MISC
 ----------------------------
