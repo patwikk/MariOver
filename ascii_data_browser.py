@@ -321,11 +321,19 @@ class TileViewer(tk.Tk):
             with open(dataset_path, 'r') as f:
                 self.dataset = json.load(f)
 
-            # Is designed to typically expect both scenes and captions, but if there are only level scenes,
-            # convert the data format
-            if isinstance(self.dataset, list) and all(isinstance(item, list) for item in self.dataset):
-                # Convert to dict format with empty caption
-                self.dataset = [{'scene': item, 'caption': ''} for item in self.dataset]
+            # Normalize every sample to a dict with at least 'scene' and 'caption' keys.
+            # Datasets come in different shapes: raw scene grids (list of lists),
+            # or dicts that may be missing 'caption' entirely (e.g. {'name', 'scene'}
+            # produced by build_dataset_with_ascii.py), so fill in defaults rather
+            # than assuming the shape.
+            normalized_dataset = []
+            for item in self.dataset:
+                if isinstance(item, list):
+                    normalized_dataset.append({'scene': item, 'caption': ''})
+                else:
+                    item.setdefault('caption', '')
+                    normalized_dataset.append(item)
+            self.dataset = normalized_dataset
 
             _, self.id_to_char, self.char_to_id, self.tile_descriptors = extract_tileset(tileset_path)
             self.color_map = self._build_color_map()
