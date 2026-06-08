@@ -15,38 +15,65 @@ import argparse
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# VGLC output height (the standard VGLC SMB format is 14 rows)
-VGLC_HEIGHT = 14
-
-# ---------------------------------------------------------------------------
 # MM2 tile categories (derived from mm2_tileset.json semantics)
 # We hard-code the mapping here so the script is self-contained, but the
 # logic mirrors the tileset JSON that ships with the dataset.
 
 # Tiles that become solid ground  X
+# Covers every MM2_ascii_guide.txt TERRAIN and PLATFORMS/MOVING tile that is
+# actually solid (Mario can stand on / collide with it). Tiles with their own
+# dedicated VGLC category (breakable brick, question block, starting brick,
+# pipes, enemies, coins) are intentionally excluded here.
 MM2_GROUND = set(
     "#"   # ground
     "H"   # hard block
-    # "S" stone -> air (treated as spawn marker placeholder, not solid)
+    "S"   # stone (solid terrain — there is no separate spawn-marker pass
+          # in this converter, so treating it as air just deletes solid walls)
+    "h"   # hidden block (solid once revealed)
     "I"   # ice block (solid; slipperiness not representable in VGLC)
     "C"   # crate
     "T"   # tree
     "="   # castle bridge
     "N"   # note block
+    "d"   # donut block (solid platform that falls)
     "p"   # p block (togglable solid)
     "O"   # on/off block (togglable solid)
+    "."   # dotted-line block (togglable solid)
     "*"   # blinking block (togglable solid)
+    "^"   # spike block (solid hazard block)
     "³"   # mushroom platform (solid platform)
+    "´"   # semisolid platform (solid from above)
     "·"   # bridge platform (solid)
+    "¸"   # lava lift (solid moving platform)
+    "¹"   # snake block (solid moving platform)
+    "º"   # track block (solid moving platform)
     "»"   # conveyor belt (solid)
     "¼"   # fast conveyor belt (solid)
+    "½"   # sprint platform (solid)
+    "¾"   # seesaw (solid moving platform)
+    "¿"   # swinging claw (solid moving platform)
+    "À"   # on/off trampoline (solid)
+    "Á"   # mushroom trampoline (solid)
     "J"   # jumping machine (solid)
+    "Â"   # half-collision platform (solid from above)
+    "Ã"   # donut platform (solid platform that falls)
     "Ù"   # exclamation block (solid)
     "Ç"   # spikes — solid hazard; treated as solid ground tile in VGLC
     "É"   # skewer — solid moving hazard
     "Ë"   # icicle
     "Ø"   # cannon (shooter, solid) — handled separately below, but kept
            # here as fallback solid
+)
+
+# Moving/damaging hazards that are NOT solid (Mario can't stand on them, just
+# takes damage from contact) — closer to "enemy" semantics in VGLC (E =
+# enemy/damaging/hazard/moving) than to ground or empty air.
+MM2_HAZARD_AS_ENEMY = set(
+    "Ä"   # fire bar
+    "Å"   # saw
+    "Æ"   # burner
+    "È"   # spike ball
+    "Ê"   # twister
 )
 
 # Starting brick: the safety platform Mario spawns on. It isn't part of the
@@ -233,8 +260,9 @@ def convert_cell(ch: str, grid: list[list[str]], row: int, col: int,
     if ch in MM2_QUESTION:
         return VGLC_QUESTION
 
-    # Enemies
-    if ch in MM2_ENEMIES:
+    # Enemies (and non-solid moving hazards, which share VGLC's "damaging
+    # / hazard / moving" semantics with enemies)
+    if ch in MM2_ENEMIES or ch in MM2_HAZARD_AS_ENEMY:
         return VGLC_ENEMY
 
     # Coins (all coin variants)
@@ -264,43 +292,19 @@ def convert_cell(ch: str, grid: list[list[str]], row: int, col: int,
     return VGLC_EMPTY
 
 
-def crop_and_pad_to_vglc_height(grid: list[list[str]]) -> list[list[str]]:
-    """
-    VGLC levels are exactly VGLC_HEIGHT rows tall.
-
-    Strategy:
-      1. Drop completely empty rows from the top until we have VGLC_HEIGHT rows
-         or exhaust them.
-      2. If the grid is taller than VGLC_HEIGHT, keep the bottom VGLC_HEIGHT rows
-         (the ground is always at the bottom in SMB-style levels).
-      3. If shorter, pad the top with empty rows.
-    """
-    # Remove leading all-space rows
-    while len(grid) > VGLC_HEIGHT and all(c == " " for c in grid[0]):
-        grid = grid[1:]
-
-    if len(grid) > VGLC_HEIGHT:
-        grid = grid[-VGLC_HEIGHT:]
-
-    width = len(grid[0]) if grid else 0
-    while len(grid) < VGLC_HEIGHT:
-        grid.insert(0, [" "] * width)
-
-    return grid
-
-
 def convert_level(lines: list[str]) -> list[str]:
+    """
+    Convert a full MM2 ASCII level to VGLC characters, preserving its entire
+    height and width. This does not crop, pad, or window the level — that
+    selection step belongs to the dataset builder (see build_dataset.py),
+    which already slides a window across the converted level to pick scenes.
+    """
     grid = normalize_grid(lines)
 
     if not grid:
-        return [VGLC_EMPTY * 10] * VGLC_HEIGHT
+        return []
 
     # Pre-pass: resolve cannon emitter positions
-    cannon_map = find_cannon_positions(grid)
-
-    # Crop/pad to VGLC height before conversion so row indexing is consistent
-    grid = crop_and_pad_to_vglc_height(grid)
-    # Rebuild cannon map after crop (positions may have shifted)
     cannon_map = find_cannon_positions(grid)
 
     height = len(grid)
@@ -339,17 +343,6 @@ def convert_level(lines: list[str]) -> list[str]:
                         row[i] = VGLC_GROUND
                 new_rows[ri] = ''.join(row)
             out_rows = new_rows
-
-    # Trim trailing all-dash columns so the level width matches actual content
-    if out_rows:
-        max_content_col = 0
-        for row in out_rows:
-            for i in range(len(row) - 1, -1, -1):
-                if row[i] != VGLC_EMPTY:
-                    if i > max_content_col:
-                        max_content_col = i
-                    break
-        out_rows = [row[:max_content_col + 1] for row in out_rows]
 
     return out_rows
 
