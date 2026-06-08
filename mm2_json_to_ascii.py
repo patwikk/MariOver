@@ -466,18 +466,20 @@ def build_ascii_grid(level):
                 char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag",0)), char)
 
             if obj_name in _SLOPE_NAMES:
-                for tc,tr in slope_tiles(obj):
-                    set_cell(tc,tr,GROUND_CHAR)
-
-                    right_slope = (obj.get("flag",0) & 0x100000) != 0
-                    step = 2 if obj["id"] == 87 else 1
-
-                    if step == 1:
-                        fill_tc = tc + 1 if right_slope else tc - 1
+                col, _ = obj_anchor(obj)
+                w, _ = obj_tile_size(obj)
+                right_slope = (obj.get("flag", 0) & 0x100000) != 0
+                slope_char = "/" if right_slope else "\\"
+                face_cells = list(slope_tiles(obj))
+                for tc, tr in face_cells:
+                    if right_slope:
+                        for fill_x in range(tc + 1, col + w):
+                            set_cell(fill_x, tr, GROUND_CHAR)
                     else:
-                        fill_tc = tc + 2 if right_slope else tc - 2
-
-                    set_cell(fill_tc,tr,GROUND_CHAR)
+                        for fill_x in range(col, tc):
+                            set_cell(fill_x, tr, GROUND_CHAR)
+                for tc, tr in face_cells:
+                    set_cell(tc, tr, slope_char)
             elif obj_name == "Mushroom Platform":
                 col,row = obj_anchor(obj)
                 w,h = obj_tile_size(obj)

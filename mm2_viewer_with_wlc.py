@@ -614,7 +614,38 @@ ASCII_MAP["_unknown"] = "?"
 
 GROUND_COLOR = "#8B6914"
 GROUND_CHAR  = "#"
- 
+
+_SLOPE_NAMES = frozenset({"slight_slope", "steep_slope"})
+
+def slope_tiles(obj: dict):
+    """Generate (col, row) for every slope face cell (the diagonal edge).
+    Works on JSON-format objects (x/y in 160-subpixel units, w/h in tiles).
+    """
+    base_col = obj["x"] // 160
+    base_row = obj["y"] // 160
+    w = max(1, obj.get("w", 1))
+    h = max(1, obj.get("h", 1))
+    obj_id = obj["id"]
+    if obj_id == 87:
+        step = 2
+    elif obj_id == 88:
+        step = 1
+    else:
+        return
+    right_slope = (obj.get("flag", 0) & 0x100000) != 0
+    for row in range(h):
+        if right_slope:
+            x_start = row * step
+            x_end = min(w, (row + 1) * step)
+        else:
+            x_start = max(0, w - (row + 1) * step)
+            x_end = w - row * step
+        x_start = max(0, x_start)
+        x_end = min(w, x_end)
+        for x in range(x_start, x_end):
+            yield (base_col + x, base_row + (h - row - 1))
+
+
 # ---------------------------------------------------------------------------
 # ASCII map — obj name → single character
 # ---------------------------------------------------------------------------
@@ -2210,9 +2241,25 @@ class MM2Viewer(tk.Tk):
         for g in ground:
             set_cell(g["x"], g["y"], "#")
         for obj in objects:
-            ch = ASCII_MAP.get(obj_id_to_str(obj["id"]), "?")
-            # Replace math.ceil with standard floor division to eliminate the +1 tile offset
-            set_cell(obj["x"] // 160, obj["y"] // 160, ch)
+            name_str = obj_id_to_str(obj["id"])
+            ch = ASCII_MAP.get(name_str, "?")
+            if name_str in _SLOPE_NAMES:
+                base_col = obj["x"] // 160
+                w = max(1, obj.get("w", 1))
+                right_slope = (obj.get("flag", 0) & 0x100000) != 0
+                slope_char = "/" if right_slope else "\\"
+                face_cells = list(slope_tiles(obj))
+                for tc, tr in face_cells:
+                    if right_slope:
+                        for fill_x in range(tc + 1, base_col + w):
+                            set_cell(fill_x, tr, GROUND_CHAR)
+                    else:
+                        for fill_x in range(base_col, tc):
+                            set_cell(fill_x, tr, GROUND_CHAR)
+                for tc, tr in face_cells:
+                    set_cell(tc, tr, slope_char)
+            else:
+                set_cell(obj["x"] // 160, obj["y"] // 160, ch)
         for col in range(7):
             for row in range(0, start_ygame):
                 set_cell(col, row, "#")
@@ -2241,12 +2288,13 @@ class MM2Viewer(tk.Tk):
         for row_canvas, row_chars in enumerate(grid):
             for col, ch in enumerate(row_chars):
                 x0, y0 = col * ts, row_canvas * ts
-                if ch == "#":   bg = "#8B6914"
-                elif ch == "-": bg = "#111111"
-                elif ch == "S": bg = "#00AA00"
+                if ch == "#":            bg = "#8B6914"
+                elif ch == "-":          bg = "#111111"
+                elif ch == "S":          bg = "#00AA00"
                 elif ch in ("G","X","F"): bg = "#CC0000"
-                elif ch == "=": bg = "#7B3F10"
-                else:           bg = "#222222"
+                elif ch == "=":          bg = "#7B3F10"
+                elif ch in ("/", "\\"): bg = "#AA8833"
+                else:                    bg = "#222222"
                 self.canvas.create_rectangle(x0, y0, x0+ts, y0+ts, fill=bg, outline="")
                 if ts >= 8:
                     fg = "#EEEEEE" if ch != "-" else "#333333"

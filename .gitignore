@@ -13,3 +13,5 @@ run.sh
 /bcd_levels/*
 /img/*
 /GENERIC_TEST
+/EXTENDED_TEST_*
+/EXTENDED_TEST

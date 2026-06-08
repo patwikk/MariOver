@@ -1013,29 +1013,21 @@ class MM2Viewer(tk.Tk):
                 char, _, _ = get_meta(obj_name)
                 if obj_name == "Pipe":
                     char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag", 0)), char)
-                if obj_name in _SLOPE_NAMES:
-                    char = "/" if (obj.get("flag", 0) >> 20) & 1 else "\\"
                 col, row = obj_anchor(obj)
                 w, h = obj_tile_size(obj)
                 if obj_name in _SLOPE_NAMES:
-
-                    for tc, tr in slope_tiles(obj):
-                        set_cell(tc, tr, GROUND_CHAR)
-
-                        right_slope = (obj.get("flag", 0) & 0x100000) != 0
-                        step = 2 if obj["id"] == 87 else 1
-
-                        base_col, _ = obj_anchor(obj)
-
-                        # Steep: every tile.
-                        # Gentle: once per 2-tile step.
-                        if step == 1:
-
-                            fill_tc = tc + 1 if right_slope else tc - 1
-                            set_cell(fill_tc, tr, GROUND_CHAR)
+                    right_slope = (obj.get("flag", 0) & 0x100000) != 0
+                    slope_char = "/" if right_slope else "\\"
+                    face_cells = list(slope_tiles(obj))
+                    for tc, tr in face_cells:
+                        if right_slope:
+                            for fill_x in range(tc + 1, col + w):
+                                set_cell(fill_x, tr, GROUND_CHAR)
                         else:
-                            fill_tc = tc + 2 if right_slope else tc - 2
-                            set_cell(fill_tc, tr, GROUND_CHAR)
+                            for fill_x in range(col, tc):
+                                set_cell(fill_x, tr, GROUND_CHAR)
+                    for tc, tr in face_cells:
+                        set_cell(tc, tr, slope_char)
 
                 elif obj_name == "Mushroom Platform":
                     sc = col + w // 2
@@ -1063,9 +1055,10 @@ class MM2Viewer(tk.Tk):
         for row_canvas, row_chars in enumerate(grid):
             for col, ch in enumerate(row_chars):
                 x0, y0 = col * ts, row_canvas * ts
-                if ch == GROUND_CHAR: bg = "#8B6914"
-                elif ch == " ":       bg = "#111111"
-                else:                 bg = "#222222"
+                if ch == GROUND_CHAR:    bg = "#8B6914"
+                elif ch in ("/", "\\"): bg = "#AA8833"
+                elif ch == " ":          bg = "#111111"
+                else:                    bg = "#222222"
                 self.canvas.create_rectangle(x0, y0, x0 + ts, y0 + ts,
                                              fill=bg, outline="")
                 if ch != " ":

@@ -466,6 +466,35 @@ def obj_anchor(obj: dict):
     return base_col, base_row
 
 
+_SLOPE_NAMES = frozenset({"slight_slope", "steep_slope"})
+
+def slope_tiles(obj: dict):
+    """Generate (col, row) for every slope face cell (the diagonal edge)."""
+    base_col, base_row = obj_anchor(obj)
+    w, h = obj_tile_size(obj)
+    if w <= 0 or h <= 0:
+        return
+    obj_id = obj["id"]
+    if obj_id == 87:
+        step = 2
+    elif obj_id == 88:
+        step = 1
+    else:
+        return
+    right_slope = (obj.get("flag", 0) & 0x100000) != 0
+    for row in range(h):
+        if right_slope:
+            x_start = row * step
+            x_end = min(w, (row + 1) * step)
+        else:
+            x_start = max(0, w - (row + 1) * step)
+            x_end = w - row * step
+        x_start = max(0, x_start)
+        x_end = min(w, x_end)
+        for x in range(x_start, x_end):
+            yield (base_col + x, base_row + (h - row - 1))
+
+
 def obj_tooltip_extra(obj: dict) -> str:
     """One-line debug summary of size/flag/ex for the hover tooltip."""
     flag = obj.get("flag", 0)
@@ -1211,9 +1240,23 @@ class MM2Viewer(tk.Tk):
                 ch = ASCII_MAP.get(name_str, "?")
                 base_col, base_row = obj_anchor(obj)
                 ow, oh = obj_tile_size(obj)
-                for dc in range(ow):
-                    for dr in range(oh):
-                        set_cell(base_col + dc, base_row + dr, ch)
+                if name_str in _SLOPE_NAMES:
+                    right_slope = (obj.get("flag", 0) & 0x100000) != 0
+                    slope_char = "/" if right_slope else "\\"
+                    face_cells = list(slope_tiles(obj))
+                    for tc, tr in face_cells:
+                        if right_slope:
+                            for fill_x in range(tc + 1, base_col + ow):
+                                set_cell(fill_x, tr, GROUND_CHAR)
+                        else:
+                            for fill_x in range(base_col, tc):
+                                set_cell(fill_x, tr, GROUND_CHAR)
+                    for tc, tr in face_cells:
+                        set_cell(tc, tr, slope_char)
+                else:
+                    for dc in range(ow):
+                        for dr in range(oh):
+                            set_cell(base_col + dc, base_row + dr, ch)
         for col in range(7):
             for row in range(0, start_ygame):
                 set_cell(col, row, "#")
@@ -1242,12 +1285,13 @@ class MM2Viewer(tk.Tk):
         for row_canvas, row_chars in enumerate(grid):
             for col, ch in enumerate(row_chars):
                 x0, y0 = col * ts, row_canvas * ts
-                if ch == "#":   bg = "#8B6914"
-                elif ch == "-": bg = "#111111"
-                elif ch == "S": bg = "#00AA00"
+                if ch == "#":            bg = "#8B6914"
+                elif ch == "-":          bg = "#111111"
+                elif ch == "S":          bg = "#00AA00"
                 elif ch in ("G","X","F"): bg = "#CC0000"
-                elif ch == "=": bg = "#7B3F10"
-                else:           bg = "#222222"
+                elif ch == "=":          bg = "#7B3F10"
+                elif ch in ("/", "\\"): bg = "#AA8833"
+                else:                    bg = "#222222"
                 self.canvas.create_rectangle(x0, y0, x0+ts, y0+ts, fill=bg, outline="")
                 if ts >= 8:
                     fg = "#EEEEEE" if ch != "-" else "#333333"
