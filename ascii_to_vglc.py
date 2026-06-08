@@ -9,8 +9,9 @@ Retains all tile maps, vertical cropping, and canonical character transitions.
 VGLC_HEIGHT = 14
 
 MM2_GROUND = set(
-    "#" "H" "I" "C" "T" "{" "=" "N" "p" "O" "*" "³" "·" "»" "¼" "J" "Ù" "Ç" "É" "Ë" "Ø"
+    "#" "H" "I" "C" "T" "=" "N" "p" "O" "*" "³" "·" "»" "¼" "J" "Ù" "Ç" "É" "Ë" "Ø"
 )
+MM2_STARTING_BRICK = set("{")
 MM2_BREAKABLE = set("B")
 MM2_QUESTION = set("?")
 MM2_PIPE_AS_GROUND = set("|DW")
@@ -57,7 +58,7 @@ def find_cannon_positions(grid: list[list[str]]) -> dict[tuple[int,int], str]:
 def convert_cell(ch: str, row: int, col: int, cannon_map: dict) -> str:
     if (row, col) in cannon_map:
         return cannon_map[(row, col)]
-    if ch == " ":
+    if ch == " " or ch in MM2_STARTING_BRICK:
         return VGLC_EMPTY
     if ch in MM2_BREAKABLE:
         return VGLC_BREAK
