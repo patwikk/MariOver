@@ -184,8 +184,8 @@ def main():
                                help="Brute-force mode: skip all converters and windowing, include every level as-is.")
     parser.add_argument("--sliding_window", action="store_true",
                         help="Collect every window position as a separate sample instead of keeping only the best window.")
-    parser.add_argument("--stride", type=int, default=1,
-                        help="Step size (in tiles) between windows when --sliding_window is active. Default: 1.")
+    parser.add_argument("--stride", type=int, default=WINDOW_W,
+                        help=f"Step size (in tiles) between windows when --sliding_window is active. Default: {WINDOW_W} (window width, no overlap).")
     args = parser.parse_args()
 
     tileset_path = args.tileset
