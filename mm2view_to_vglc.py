@@ -31,7 +31,6 @@ MM2_GROUND = set(
     "I"   # ice block (solid; slipperiness not representable in VGLC)
     "C"   # crate
     "T"   # tree
-    "{"   # starting brick
     "="   # castle bridge
     "N"   # note block
     "p"   # p block (togglable solid)
@@ -50,6 +49,10 @@ MM2_GROUND = set(
            # here as fallback solid
 )
 
+# Starting brick: the safety platform Mario spawns on. It isn't part of the
+# drawn level geometry, so it converts to air rather than solid ground.
+MM2_STARTING_BRICK = set("{")
+
 # Tiles that become breakable brick  S
 MM2_BREAKABLE = set("B")  # breakable brick
 
@@ -57,10 +60,15 @@ MM2_BREAKABLE = set("B")  # breakable brick
 # All question-block variants collapse to the full/active version.
 MM2_QUESTION = set("?")
 
-# Pipes and warp tiles -> ground for now (no VGLC pipe distinction needed)
-MM2_PIPE      = set()   # disabled: pipes treated as ground
-MM2_WARPSOLID = set()   # disabled: warp tiles treated as ground
-MM2_PIPE_AS_GROUND = set("|DW")  # these all map to X
+# Pipes: MM2 marks orientation explicitly, so classify_pipe_cell() can pick
+# the correct VGLC pipe glyph (< > [ ]) instead of flattening to ground.
+MM2_PIPE_UPRIGHT  = set("|↑")   # mouth faces up (standard pipe)
+MM2_PIPE_DOWN     = set("↓")    # mouth faces down (ceiling pipe)
+MM2_PIPE_SIDEWAYS = set("←→")  # horizontal pipe — VGLC has no equivalent, treat as ground
+MM2_PIPE = MM2_PIPE_UPRIGHT | MM2_PIPE_DOWN | MM2_PIPE_SIDEWAYS
+
+# Door / warp box tiles are solid structures, not pipes -> ground
+MM2_PIPE_AS_GROUND = set("DW")
 
 # Cannon emitter tiles (small airship cannons, etc.) — just place cannon-top
 MM2_CANNON_EMITTER = set("V")  # shooter/cannon block
@@ -135,56 +143,49 @@ def normalize_grid(lines: list[str]) -> list[list[str]]:
 
 
 def is_pipe_tile(ch: str) -> bool:
-    return ch in MM2_PIPE or ch in MM2_WARPSOLID
+    return ch in MM2_PIPE
 
 
 def classify_pipe_cell(grid: list[list[str]], row: int, col: int) -> str:
     """
-    Given a pipe/warp tile at (row, col), return the VGLC pipe character.
+    Map an MM2 pipe tile to its VGLC pipe character.
 
-    VGLC pipe convention (SMB):
-        < >   ← top of pipe (left half, right half)
-        [ ]   ← body/bottom of pipe (left half, right half)
+    VGLC pipe convention (SMB) — pipes always open upward:
+        < >   top halves (the enterable mouth)
+        [ ]   body halves
 
-    MM2 pipe columns are 1 cell wide (single '|'), so we manufacture
-    left/right halves by treating odd columns as "left" and even as "right" —
-    except we check the neighbouring cell first: if the neighbour is also a
-    pipe tile we split normally; if not, we just emit a single-width top.
+    MM2 marks pipe orientation explicitly:
+      - '|' / '↑'  upright pipe, mouth at the top
+      - '↓'        ceiling pipe, mouth at the bottom
+      - '←' / '→' sideways pipe — no VGLC equivalent (handled by the caller,
+                    which routes these to solid ground before reaching here)
 
-    Simpler heuristic that works well in practice:
-      - If there is NO pipe tile directly above → it's a top cell.
-      - If there IS a pipe tile above → it's a body cell.
-    Then for left/right we check whether the right neighbour is also pipe:
-      - If right neighbour is pipe → this cell is the LEFT half.
-      - Else if left neighbour is pipe → this cell is the RIGHT half.
-      - Else (single-cell pipe column) → emit both halves? No — VGLC uses
-        two-cell-wide pipes. We'll emit the single cell as a left half top
-        and let the caller handle width. Actually: just emit < or [ for
-        single-cell columns; the VGLC reference uses two-cell pipes but
-        single-cell pipe columns in MM2 are common, so we just pick one
-        representative character.
+    For ceiling pipes we flip the cap test to look at the cell below, so the
+    mouth (where Mario actually enters/exits) still maps onto < / > rather
+    than being buried in the middle of a body run.
+
+    Left/right halves are picked by checking which neighbour is also a pipe
+    tile; single-width MM2 pipe columns simply emit the left-half glyph.
     """
+    ch     = grid[row][col]
     height = len(grid)
     width  = len(grid[0]) if height > 0 else 0
 
-    above = grid[row - 1][col] if row > 0 else " "
-    right = grid[row][col + 1] if col + 1 < width else " "
-    left  = grid[row][col - 1] if col - 1 >= 0  else " "
-
-    is_top  = not is_pipe_tile(above)
-    is_left_half = is_pipe_tile(right)    # right neighbour is also pipe → we are the left side
+    right = grid[row][col + 1] if col + 1 < width  else " "
+    left  = grid[row][col - 1] if col - 1 >= 0     else " "
     is_right_half = is_pipe_tile(left) and not is_pipe_tile(right)
 
-    if is_top:
-        if is_right_half:
-            return PIPE_TOP_RIGHT
-        else:
-            return PIPE_TOP_LEFT   # single-cell or left half of two-cell
+    if ch in MM2_PIPE_DOWN:
+        below  = grid[row + 1][col] if row + 1 < height else " "
+        is_cap = not is_pipe_tile(below)
     else:
-        if is_right_half:
-            return PIPE_BOT_RIGHT
-        else:
-            return PIPE_BOT_LEFT
+        above  = grid[row - 1][col] if row > 0 else " "
+        is_cap = not is_pipe_tile(above)
+
+    if is_cap:
+        return PIPE_TOP_RIGHT if is_right_half else PIPE_TOP_LEFT
+    else:
+        return PIPE_BOT_RIGHT if is_right_half else PIPE_BOT_LEFT
 
 
 def find_cannon_positions(grid: list[list[str]]) -> dict[tuple[int,int], str]:
@@ -219,8 +220,9 @@ def convert_cell(ch: str, grid: list[list[str]], row: int, col: int,
     if (row, col) in cannon_map:
         return cannon_map[(row, col)]
 
-    # Empty / air
-    if ch == " ":
+    # Empty / air (the spawn platform converts to air too — it's not part of
+    # the drawn level geometry)
+    if ch == " " or ch in MM2_STARTING_BRICK:
         return VGLC_EMPTY
 
     # Breakable brick
@@ -239,7 +241,14 @@ def convert_cell(ch: str, grid: list[list[str]], row: int, col: int,
     if ch in MM2_COINS:
         return VGLC_COIN
 
-    # Pipe / warp tile -> ground
+    # Pipes -> proper VGLC pipe glyphs (sideways pipes have no VGLC
+    # equivalent and fall through to solid ground)
+    if ch in MM2_PIPE:
+        if ch in MM2_PIPE_SIDEWAYS:
+            return VGLC_GROUND
+        return classify_pipe_cell(grid, row, col)
+
+    # Door / warp box -> ground
     if ch in MM2_PIPE_AS_GROUND:
         return VGLC_GROUND
 

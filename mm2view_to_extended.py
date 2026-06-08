@@ -52,7 +52,6 @@ MM2_GROUND = {
     "I",   # ice block
     "C",   # crate
     "T",   # tree
-    "{",   # starting brick
     "=",   # castle bridge
     "N",   # note block
     "p",   # p block (togglable solid)
