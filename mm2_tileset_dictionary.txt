@@ -1,0 +1,165 @@
+MM2 TILESET DICTIONARY
+
+TERRAIN & BLOCKS
+----------------
+' ' (space)  Empty / Air
+'#'          Ground
+'B'          Brick Block
+'H'          Hard Block
+'?'          Question Block
+'h'          Hidden Block
+'N'          Note Block
+'d'          Donut Block (falling)
+'I'          Ice Block
+'p'          P Block
+'O'          On/Off Block
+'.'          Dotted-Line Block
+'*'          Blinking Block
+'^'          Spike Block
+'C'          Crate
+'S'          Stone Block
+'{'          Starting Brick
+'='          Castle Bridge
+'T'          Tree
+'/'          Slight Slope
+'\'          Steep Slope
+
+
+PIPES, DOORS & WARPS
+--------------------
+'|'          Pipe
+'D'          Door
+'W'          Warp Box
+'k'          Key
+'f'          Checkpoint Flag
+'G'          Goal (Flagpole / Goal Card)
+'c'          Clear Pipe
+'↑'          Pipe (pointing up)
+'↓'          Pipe (pointing down)
+'←'          Pipe (pointing left)
+'→'          Pipe (pointing right)
+
+
+ENEMIES & BOSSES 
+-----------------------------------------------------------------------------
+'g'   Goomba             - basic walking enemy, squashed in one stomp
+'K'   Koopa Troopa       - shelled walking enemy
+'P'   Piranha Plant      - emerges from pipes/ground and bites
+'m'   Hammer Bro         - stands and throws hammers
+'t'   Thwomp             - heavy block that slams down to crush the player
+'o'   Bob-omb            - walking bomb that explodes on contact/when stomped
+'s'   Spiny              - spiked enemy, unsafe to stomp directly
+'b'   Buzzy Beetle       - shelled enemy, immune to fire, can be kicked
+'L'   Lakitu             - flying enemy riding a cloud, throws Spinies
+'l'   Lakitu's Cloud     - the cloud Lakitu rides (rideable once vacated)
+'Z'   Banzai Bill        - giant flying bullet/cannonball enemy
+'V'   Bullet Bill Blaster- cannon turret that fires Bullet Bills
+'y'   Magikoopa          - flying Koopa that casts spells/summons enemies
+'<'   Spike Top          - spiked shell enemy that walks on walls/ceilings
+'u'   Boo                - shy ghost that only moves when not being looked at
+'X'   Bowser             - the final boss
+'x'   Bowser Jr.         - recurring sub-boss
+'@'   Chain Chomp        - chained, lunging biting enemy
+'~'   Cheep Cheep        - swimming fish enemy
+'q'   Blooper            - squid enemy that swims toward the player
+'w'   Wiggler            - caterpillar enemy; turns red and speeds up if stomped
+'Y'   Pokey              - enemy made of stacked cactus segments
+'e'   Piranha Creeper    - Piranha Plant that climbs along vines
+'F'   Porcupuffer        - large spiked pufferfish enemy found in water/lava
+'%'   Fish Bone          - skeletal fish that leaps out of water or lava
+'&'   Lava Bubble        - fireball that jumps up out of lava
+'r'   Rocky Wrench       - pops out of pipes and throws wrenches
+','   Muncher            - stationary plant, instantly fatal on contact
+'a'   Ant Trooper        - armored ant-like marching enemy
+'n'   Monty Mole         - burrows underground and pops up at the player
+'R'   Mechakoopa         - wind-up robotic Koopa that can be picked up and thrown
+'!'   Boom Boom          - mini-boss enemy that spins and charges
+'9'   Dry Bones          - skeletal Koopa that reassembles after being stomped
+'j'   Skipsqueak         - small, fast rodent that scurries back and forth
+'+'   Cinobio            - sumo-wrestler-like clone enemy (SMB2 Mushroom theme)
+'¡'   Cinobic            - black/shadow variant of the Cinobio
+';'   Stingby            - flying bee-like enemy that chases the player
+'A'   Angry Sun          - sun enemy that periodically swoops down
+'v'   Charvaargh         - giant fish/lava creature that lunges out to bite
+'['   Bully              - horned enemy that shoves the player and other enemies
+'1'   Lemmy Koopa        - Koopaling boss
+'2'   Morton Koopa Jr.   - Koopaling boss
+'3'   Larry Koopa        - Koopaling boss
+'4'   Wendy O. Koopa     - Koopaling boss
+'5'   Iggy Koopa         - Koopaling boss
+'6'   Roy Koopa          - Koopaling boss
+'7'   Ludwig von Koopa   - Koopaling boss
+'µ'   Goomba's Shoe      - giant shoe that an enemy can ride around in
+
+
+ITEMS, POWER-UPS & COLLECTABLES
+-------------------------------
+'¢'   Coin
+'$'   Red Coin
+'£'   Big Coin (10-Coin)
+'U'   1-Up Mushroom
+'i'   Fire Flower
+'¤'   Super Star
+'M'   Super Mushroom
+'¶'   Big (Mega) Mushroom
+'§'   SMB2 Mushroom (gives Toad's "pluck & throw" ability)
+'¬'   Super Hammer
+'¦'   P Switch
+'¯'   POW Block
+'±'   Spring
+']'   Cannon Box (Mario costume / power-up)
+'}'   Propeller Box (Mario costume / power-up)
+')'   Goomba Mask (Mario costume / power-up)
+'°'   Bullet Bill Mask (Mario costume / power-up)
+'²'   Red POW Box
+
+
+PLATFORMS & MOVING OBJECTS
+--------------------------
+'-'   Lift
+'³'   Mushroom Platform
+'´'   Semisolid Platform
+'·'   Bridge
+'¸'   Lava Lift
+'¹'   Snake Block
+'º'   Track Block
+'»'   Conveyor Belt
+'¼'   Fast Conveyor Belt
+'½'   Sprint Platform
+'¾'   Seesaw
+'¿'   Swinging Claw
+'À'   On/Off Trampoline
+'Á'   Trampoline (Mushroom Trampoline)
+'J'   Jumping Machine
+'Â'   Half-Collision (Semisolid) Platform
+'Ã'   Donut Block Platform (falls after being stood on)
+
+
+HAZARDS (non-creature)
+----------------------
+'Ä'   Fire Bar
+'Å'   Saw
+'Æ'   Burner
+'Ç'   Spike Trap
+'È'   Spike Ball (Wrecking Ball)
+'É'   Skewer
+'Ê'   Twister
+'Ë'   Icicle
+'Ø'   Cannon
+
+
+DECORATIONS, VEHICLES & MISC
+----------------------------
+'Ì'   Cloud (background decoration)
+'Í'   Vine
+'Î'   Water Marker
+'Ï'   Arrow (decoration)
+'Ð'   One-Way Wall / Platform
+'Ñ'   Reel Camera (cutscene trigger marker)
+'Ò'   Sound Effect marker
+'Ó'   Player Spawn Point
+'Ô'   Clown Car (Bowser Jr.'s vehicle)
+'Õ'   Koopa Car / Koopa Clown Car
+'Ö'   Track (rail that Track Blocks ride along)
+'×'   Starting Arrow (decoration)
+'Ù'   Exclamation Block (! Block)
