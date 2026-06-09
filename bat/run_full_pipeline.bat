@@ -1,41 +1,80 @@
 REM @echo off
-REM Usage: run_full_pipeline.bat <input> <model_path> [type] [game] [seed]
-REM <input>      path to a .txt ASCII level file or folder of .txt files
-REM <model_path> path to the diffusion model
-REM [type]       defaults to "regular"
-REM [game]       defaults to "MM"
-REM [seed]       defaults to 0
+REM Usage: run_full_pipeline.bat <input> [type] [game] [seed]
+REM <input>  path to a .txt ASCII level file or folder of .txt files
+REM [type]   defaults to "regular"
+REM [game]   defaults to "MM"
+REM [seed]   defaults to 0
+cd ..
 
 set INPUT=%1
-set MODEL_PATH=%2
-set TYPE=%3
-set GAME=%4
-set SEED=%5
+set TYPE=%2
+set GAME=%3
+set SEED=%4
 
 if "%INPUT%"=="" (
     echo ERROR: Must provide input path as first argument.
-    exit /b 1
-)
-if "%MODEL_PATH%"=="" (
-    echo ERROR: Must provide model_path as second argument.
     exit /b 1
 )
 if "%TYPE%"=="" set TYPE=regular
 if "%GAME%"=="" set GAME=MM
 if "%SEED%"=="" set SEED=0
 
-echo === Step 1: Preparing dataset with LLM captions ===
-call prepare-mario-maker-llm.bat "%INPUT%" %SEED%
+set LLM_MODEL=qwen2.5:14b
+set TILESET=smb.json
+if /I "%GAME%"=="MM" set TILESET=extended_tiles.json
+
+set RAW_OUTPUT=datasets\%GAME%_Levels-%TYPE%.json
+set CAPTIONED_OUTPUT=datasets\%GAME%_LevelsAndCaptions-%TYPE%.json
+set MLM_OUTPUT=%GAME%-MLM-%TYPE%%SEED%
+set DIFF_OUTPUT=%GAME%-conditional-%TYPE%%SEED%
+
+REM ── Ollama setup ────────────────────────────────────────────────────────────
+ollama list >nul 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo ERROR: prepare-mario-maker-llm.bat failed.
+    echo Ollama not running. Starting ollama serve...
+    start /min "" ollama serve
+    echo Waiting for Ollama to initialise...
+    timeout /t 6 /nobreak >nul
+)
+
+echo Pulling %LLM_MODEL% ^(no-op if already present^)...
+ollama pull %LLM_MODEL%
+if %ERRORLEVEL% neq 0 (
+    echo ERROR: Failed to pull %LLM_MODEL%. Is Ollama running?
     exit /b 1
 )
 
-echo === Step 2: Running diffusion generation ===
-call run_diffusion_multi.bat "%MODEL_PATH%" %TYPE% %GAME%
+echo === Step 1: Preparing dataset with LLM captions ===
+python build_dataset_with_ascii.py --input_file %INPUT% --output %RAW_OUTPUT% --tileset %TILESET% --sliding_window --stride 20 --convert_to_extended
+if %ERRORLEVEL% neq 0 ( echo ERROR: build_dataset_with_ascii.py failed. & exit /b 1 )
+python MarioMaker_llm_captions.py --dataset %RAW_OUTPUT% --tileset %TILESET% --output %CAPTIONED_OUTPUT% --model %LLM_MODEL%
+if %ERRORLEVEL% neq 0 ( echo ERROR: MarioMaker_llm_captions.py failed. & exit /b 1 )
+python split_mario_maker_data.py --json %CAPTIONED_OUTPUT% --seed %SEED%
+if %ERRORLEVEL% neq 0 ( echo ERROR: split_mario_maker_data.py failed. & exit /b 1 )
+python tokenizer.py save --json_file datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --pkl_file datasets\%GAME%_Tokenizer-%TYPE%.pkl
+if %ERRORLEVEL% neq 0 ( echo ERROR: tokenizer.py failed. & exit /b 1 )
+python create_mario_maker_random_captions.py --json %CAPTIONED_OUTPUT% --output datasets\%GAME%_RandomTest-%TYPE%.json
+if %ERRORLEVEL% neq 0 ( echo ERROR: create_mario_maker_random_captions.py failed. & exit /b 1 )
+
+echo === Step 2: Training MLM model ===
+python train_mlm.py --epochs 300 --save_checkpoints --json datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --val_json datasets\%GAME%_LevelsAndCaptions-%TYPE%-validate.json --test_json datasets\%GAME%_LevelsAndCaptions-%TYPE%-test.json --pkl datasets\%GAME%_Tokenizer-%TYPE%.pkl --output_dir %MLM_OUTPUT% --seed %SEED%
+if %ERRORLEVEL% neq 0 (
+    echo ERROR: train_mlm.py failed.
+    exit /b 1
+)
+
+echo === Step 3: Training diffusion model ===
+python train_diffusion.py --game %GAME% --save_image_epochs 1000 --augment --text_conditional --output_dir "%DIFF_OUTPUT%" --num_epochs 500 --json datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --pkl datasets\%GAME%_Tokenizer-%TYPE%.pkl --mlm_model_dir %MLM_OUTPUT% --seed %SEED%
+if %ERRORLEVEL% neq 0 (
+    echo ERROR: train_diffusion.py failed.
+    exit /b 1
+)
+
+echo === Step 4: Running diffusion generation ===
+call bat\run_diffusion_multi.bat "%DIFF_OUTPUT%" %TYPE% %GAME%
 if %ERRORLEVEL% neq 0 (
     echo ERROR: run_diffusion_multi.bat failed.
     exit /b 1
 )
 
-echo === Pipeline complete! ===
+echo === Pipeline complete! Model saved to: %DIFF_OUTPUT% ===
