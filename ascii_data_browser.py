@@ -347,35 +347,30 @@ class TileViewer(tk.Tk):
         TAG_COLORS = [
             ("empty",       (0.20, 0.30, 0.70)),
             ("air",         (0.20, 0.30, 0.70)),
-            ("passable",    (0.70, 0.85, 1.00)),
-            ("spawn",       (0.00, 0.00, 0.90)),
-            ("goal",        (0.00, 0.90, 0.30)),
-            ("pipe",        (0.00, 0.50, 0.00)),
+            ("pipe",        (0.00, 0.55, 0.10)),
             ("warp",        (0.10, 0.70, 0.20)),
             ("door",        (0.10, 0.70, 0.20)),
+            ("goal",        (0.00, 0.90, 0.30)),
+            ("spawn",       (0.00, 0.00, 0.90)),
             ("enemy",       (0.90, 0.10, 0.10)),
             ("damaging",    (0.90, 0.10, 0.10)),
             ("hazard",      (1.00, 0.50, 0.00)),
             ("collectable", (1.00, 0.85, 0.00)),
             ("item",        (1.00, 0.85, 0.00)),
             ("platform",    (0.30, 0.50, 0.90)),
-            ("terrain",     (0.50, 0.35, 0.10)),
+            ("passable",    (0.70, 0.85, 1.00)),
             ("solid",       (0.50, 0.35, 0.10)),
             ("decoration",  (0.60, 0.60, 0.60)),
         ]
-        base_colors = level_dataset.colors()
         color_map = {}
         for tile_id, char in self.id_to_char.items():
-            if tile_id < len(base_colors):
-                color_map[tile_id] = base_colors[tile_id]
-            else:
-                descriptors = self.tile_descriptors.get(char, set())
-                color = (0.80, 0.80, 0.80)
-                for tag, col in TAG_COLORS:
-                    if tag in descriptors:
-                        color = col
-                        break
-                color_map[tile_id] = color
+            descriptors = self.tile_descriptors.get(char, set())
+            color = (0.80, 0.80, 0.80)
+            for tag, col in TAG_COLORS:
+                if tag in descriptors:
+                    color = col
+                    break
+            color_map[tile_id] = color
         return color_map
 
     def load_model(self):
@@ -534,9 +529,9 @@ class TileViewer(tk.Tk):
             from PIL import Image
 
             #Get the right size for the one-hot encoding
-            num_classes = common_settings.MARIO_TILE_COUNT
-            
-            
+            num_classes = len(self.id_to_char)
+
+
             one_hot_scene = torch.nn.functional.one_hot(
                 torch.tensor(sample['scene'], dtype=torch.long),
                 num_classes=num_classes
