@@ -102,33 +102,27 @@ MM2_ENEMIES_GENERIC = set(
 )
 
 # ---------------------------------------------------------------------------
-# Output characters
-OUT_EMPTY    = "-"
-OUT_GROUND   = "X"
-OUT_BRICK    = "S"
+# Output characters — must match the chars in extended_tiles.json exactly
+OUT_EMPTY    = " "
+OUT_GROUND   = "#"
+OUT_BRICK    = "B"
 OUT_QUESTION = "?"
-OUT_COIN     = "o"
-OUT_ENEMY    = "E"
+OUT_COIN     = "¢"
+OUT_ENEMY    = "g"
 OUT_KOOPA    = "K"
 OUT_PIRANHA  = "P"
 OUT_SPIKE    = "^"
-OUT_MUSHROOM = "M"
+OUT_MUSHROOM = "³"
 OUT_BREAK_NB = "N"
-OUT_CANNON_T = "B"
-OUT_CANNON_B = "b"
-OUT_BRIDGE   = "="
-OUT_SEMISOLID= "_"
-OUT_STONE    = "W"
-OUT_FIRE_FL  = "F"
-OUT_THWOMP   = "T"
-PIPE_TOP_L   = "<"   # upright pipe cap
-PIPE_TOP_R   = ">"
-PIPE_BOT_L   = "["   # upright pipe body
-PIPE_BOT_R   = "]"
-PIPE_CAP_L   = "("   # upside-down pipe cap (mouth at bottom)
-PIPE_CAP_R   = ")"
-PIPE_UDB_L   = "{"   # upside-down pipe body
-PIPE_UDB_R   = "}"
+OUT_CANNON_T = "V"
+OUT_CANNON_B = "V"
+OUT_BRIDGE   = "·"
+OUT_SEMISOLID= "´"
+OUT_STONE    = "S"
+OUT_FIRE_FL  = "i"
+OUT_THWOMP   = "t"
+PIPE_UPRIGHT = "↑"   # upright pipe (cap and body collapse to one char)
+PIPE_DOWN    = "↓"   # ceiling pipe (cap and body)
 
 # ---------------------------------------------------------------------------
 
@@ -155,35 +149,12 @@ def is_pipe_tile(ch: str) -> bool:
 
 
 def classify_pipe_cell(grid: list[list[str]], row: int, col: int) -> str:
-    ch     = grid[row][col]
-    height = len(grid)
-    width  = len(grid[0]) if height > 0 else 0
-
-    # Sideways pipes: just solid ground
+    ch = grid[row][col]
     if ch in MM2_PIPE_SIDEWAYS:
         return OUT_GROUND
-
-    above = grid[row - 1][col] if row > 0           else " "
-    below = grid[row + 1][col] if row + 1 < height  else " "
-    right = grid[row][col + 1] if col + 1 < width   else " "
-    left  = grid[row][col - 1] if col - 1 >= 0      else " "
-
-    is_right_half = is_pipe_tile(left) and not is_pipe_tile(right)
-
     if ch in MM2_PIPE_DOWN:
-        # Mouth faces down: cap row has no pipe below it
-        is_cap = not is_pipe_tile(below)
-        if is_cap:
-            return PIPE_CAP_R if is_right_half else PIPE_CAP_L
-        else:
-            return PIPE_UDB_R if is_right_half else PIPE_UDB_L
-    else:
-        # Standard upright: cap row has no pipe above it
-        is_cap = not is_pipe_tile(above)
-        if is_cap:
-            return PIPE_TOP_R if is_right_half else PIPE_TOP_L
-        else:
-            return PIPE_BOT_R if is_right_half else PIPE_BOT_L
+        return PIPE_DOWN
+    return PIPE_UPRIGHT
 
 
 def find_cannon_positions(grid: list[list[str]]) -> dict[tuple[int, int], str]:
