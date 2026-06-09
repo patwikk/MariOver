@@ -697,7 +697,7 @@ def generate_captions(dataset_path, tileset_path, output_path, model, url, timeo
 
         print(f"[{i + 1}/{total}] {name} ...", end=" ", flush=True)
         try:
-            caption = call_ollama(prompt, model, url, timeout, retries)
+            caption = call_ollama(prompt, model, url, timeout, retries).replace("\n", ". ")
             print("OK")
         except RuntimeError as e:
             print(f"ERROR: {e}")
