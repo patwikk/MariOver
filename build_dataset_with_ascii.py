@@ -24,17 +24,24 @@ def load_tileset(path):
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     chars = sorted(data["tiles"].keys())
+    # Determine the extra/padding tile for unknown source characters.
+    # If "_" is already a real tile in this tileset (e.g., extended_tiles.json
+    # defines it as semisolid platform), use a null-byte sentinel instead so
+    # unknown chars don't silently become semisolid tiles.
     if EXTRA_TILE not in chars:
-        chars.append(EXTRA_TILE)
-    return {ch: idx for idx, ch in enumerate(chars)}
+        extra_tile = EXTRA_TILE
+    else:
+        extra_tile = "\x00"
+    chars.append(extra_tile)
+    return {ch: idx for idx, ch in enumerate(chars)}, extra_tile
 
 def _pad_rows(rows, width, empty_char):
     pad_rows = max(0, WINDOW_H - len(rows))
     padded = [empty_char * width] * pad_rows + list(rows)
     return [r.ljust(width, empty_char) for r in padded]
 
-def extract_best_window(rows, tile_to_id, empty_char="-"):
-    extra_id = tile_to_id.get(EXTRA_TILE, 0)
+def extract_best_window(rows, tile_to_id, extra_tile=EXTRA_TILE, empty_char="-"):
+    extra_id = tile_to_id.get(extra_tile, 0)
     empty_id = tile_to_id.get(empty_char, 0)
 
     height = len(rows)
@@ -67,9 +74,9 @@ def extract_best_window(rows, tile_to_id, empty_char="-"):
 
     return best_scene
 
-def extract_all_windows(rows, tile_to_id, stride=1, empty_char="-"):
+def extract_all_windows(rows, tile_to_id, extra_tile=EXTRA_TILE, stride=1, empty_char="-"):
     """Slide a WINDOW_H x WINDOW_W window across the level and return every window."""
-    extra_id = tile_to_id.get(EXTRA_TILE, 0)
+    extra_id = tile_to_id.get(extra_tile, 0)
 
     width = max((len(r) for r in rows), default=0)
 
@@ -199,7 +206,7 @@ def main():
     tileset_path = args.tileset
     if args.convert_to_extended and tileset_path == os.path.join(HERE, "smb.json"):
         tileset_path = os.path.join(HERE, "extended_tiles.json")
-    tile_to_id = load_tileset(tileset_path)
+    tile_to_id, extra_tile = load_tileset(tileset_path)
     default_empty_char = detect_empty_char(tileset_path)
 
     converter_mod = None
@@ -234,7 +241,7 @@ def main():
                     empty_char = default_empty_char
 
                 if args.sliding_window:
-                    scenes = extract_all_windows(rows, tile_to_id, stride=args.stride, empty_char=empty_char)
+                    scenes = extract_all_windows(rows, tile_to_id, extra_tile=extra_tile, stride=args.stride, empty_char=empty_char)
                     if not scenes:
                         print(f"  [SKIP] {full_name} (empty)")
                         skipped += 1
@@ -244,7 +251,7 @@ def main():
                     processed += len(scenes)
                     print(f"  [OK] {full_name} ({len(scenes)} windows)")
                 else:
-                    scene = extract_best_window(rows, tile_to_id, empty_char=empty_char)
+                    scene = extract_best_window(rows, tile_to_id, extra_tile=extra_tile, empty_char=empty_char)
                     if scene is None:
                         print(f"  [SKIP] {full_name} (empty)")
                         skipped += 1

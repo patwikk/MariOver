@@ -37,3 +37,5 @@ python run_diffusion.py --model_path (training_folder) --num_samples (number of 
 **Running captioned diffusion with GUI:**
 python interactive_tile_level_generator.py --model_path (generated_dataset) --load_data datasets/Mar1and2_LevelsAndCaptions-regular.json
 
+**Running MarioMaker_create_ascii_captions.py:**
+python MarioMaker_create_ascii_captions.py --dataset (input.json) --tileset (tileset.json) --output (output.json)
