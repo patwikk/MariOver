@@ -143,7 +143,7 @@ def parse_args():
         "--game",
         type=str,
         default="Mario",
-        choices=["Mario"],
+        choices=["Mario", "MM"],
         help="Which game to create a model for (affects sample style and tile count)"
     )
 
@@ -271,12 +271,14 @@ def main():
 
     game_tile_counts = {
         "Mario": common_settings.MARIO_TILE_COUNT,
+        "MM": common_settings.MM_EXTENDED_TILE_COUNT,
         #"LR": common_settings.LR_TILE_COUNT,
         #"MM-Simple": common_settings.MM_SIMPLE_TILE_COUNT,
         #"MM-Full": common_settings.MM_FULL_TILE_COUNT,
     }
     game_tilesets = {
         "Mario": common_settings.MARIO_TILESET,
+        "MM": common_settings.MM_EXTENDED_TILESET,
         #"LR": common_settings.LR_TILESET,
         #"MM-Simple": 'datasets/MM_Simple_Tileset.json',
        # "MM-Full": '../TheVGLC/MegaMan/MM.json',

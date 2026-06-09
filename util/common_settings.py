@@ -12,3 +12,6 @@ MARIO_TILE_COUNT = 13
 
 MARIO_TILESET = 'mm2_tileset_full.json'
 
+MM_EXTENDED_TILE_COUNT = 23  # 22 tiles in extended_tiles.json + 1 extra/padding tile
+MM_EXTENDED_TILESET = 'extended_tiles.json'
+
