@@ -46,7 +46,7 @@ import sys
 import argparse
 from pathlib import Path
 
-VGLC_HEIGHT = 14
+VGLC_HEIGHT = 20
 
 # ---------------------------------------------------------------------------
 # MM2 source character sets
