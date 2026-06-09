@@ -20,7 +20,7 @@ if "%SEED%"=="" set SEED=0
 set GAME=MM
 set TYPE=regular
 set TILESET=extended_tiles.json
-set MODEL=llama3.1:8b
+set MODEL=qwen2.5:14b
 
 set RAW_OUTPUT=datasets\%GAME%_Levels-%TYPE%.json
 set CAPTIONED_OUTPUT=datasets\%GAME%_LevelsAndCaptions-%TYPE%.json

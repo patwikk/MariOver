@@ -24,16 +24,16 @@ EXTENDED_CHAR_NAMES = {
     "#": "Ground",
     "B": "Brick",
     "?": "Question Block",
-    "¢": "Coin",
+    "\xa2": "Coin",
     "g": "Enemy",
     "K": "Koopa",
     "P": "Piranha Plant",
     "t": "Thwomp",
     "^": "Spike",
     "N": "Block",
-    "³": "Mushroom Platform",
-    "·": "Bridge",
-    "´": "Semisolid Platform",
+    "\xb3": "Mushroom Platform",
+    "\xb7": "Bridge",
+    "\xb4": "Semisolid Platform",
     "S": "Stone",
     "i": "Fire Flower",
     "V": "Cannon",
@@ -184,392 +184,226 @@ MM2_CHAR_NAMES = {
     "\xd9": "Exclamation Block",
 }
 
+# ── Terrain character sets (solid tiles used for height/gap analysis) ─────────
+
+TERRAIN_CHARS_MM2 = frozenset({"#", "H", "B", "S", "I", "C", "/", "\\"})
+TERRAIN_CHARS_EXT = frozenset({"#", "B", "N", "S"})
+
 # ── Prompt template ───────────────────────────────────────────────────────────
 
 PROMPT_TEMPLATE = """\
 You are an expert Mario Maker 2 level captioner.
 
-You will be given:
+You will receive three inputs:
+1. A symbol dictionary mapping ASCII characters to Mario Maker 2 objects.
+2. Pre-computed level metadata (object tile counts, terrain column heights, floor/ceiling analysis).
+3. An ASCII level grid (read top-to-bottom, left-to-right).
 
-1. A dictionary mapping ASCII symbols to Mario Maker 2 objects.
-2. Optional pre-computed level metadata (object counts, terrain analysis, gap analysis, region analysis, structure locations). When present, trust the metadata over your own reading of the ASCII level, especially for counts and terrain descriptions.
-3. An ASCII level.
+Trust the metadata for object counts and terrain heights. Do not re-count tiles from the ASCII.
 
-Write a caption describing the level.
-
-These captions train a diffusion model that learns to associate short phrases with visible level structures. Each phrase should correspond to one concrete thing that can be generated in a level.
+Your output trains a diffusion model. Each phrase must correspond to one concrete, visible structure or feature.
 
 OUTPUT FORMAT
 
-* Output only the caption.
+* Output only the caption, nothing else.
 * Use lowercase only.
 * Write all phrases on a single line separated by periods.
-* Do not output any \n characters. The entire caption must be one single unbroken line of text.
-* Do not write prose.
-* Do not write complete sentences.
-* Each phrase should describe exactly one structure, object group, region, or feature.
-* Most phrases should be between two and six words.
+* The entire output must be one unbroken line with no newlines.
+* Each phrase describes exactly one structure, object group, region, or feature.
+* Phrase length: two to six words each.
 * Never explain your reasoning.
-
-GENERAL PRINCIPLES
-
-Each phrase should answer one or more of:
-
-* what is it?
-* what shape is it?
-* what is it made of?
-* where is it?
-
-Prefer concrete, reusable descriptions.
-
-Avoid subjective language.
-
-Do not discuss:
-
-* gameplay
-* difficulty
-* quality
-* fun
-* creativity
-* designer intent
-
-Do not address the player.
-
-PHRASE RULES
-
-* One phrase = one concept.
-* Do not combine multiple structures into one phrase.
-* If two things are important, write two phrases.
-* Avoid repetition.
-* Do not describe the same feature twice.
 
 PRIORITY ORDER
 
-1. Terrain topology.
-2. Region divisions and room structure.
-3. Platforms and major structures.
-4. Pipes, doors, warp elements, and traversal structures.
-5. Enemies and hazards.
-6. Collectibles and power-ups.
+1. Terrain topology and floor shape.
+2. Region divisions (gaps, walls, chambers).
+3. Platforms and major mid-air structures.
+4. Pipes, doors, and traversal elements.
+5. Enemies and hazards (always with placement).
+6. Collectibles and power-ups (with placement when prominent).
 
-TERRAIN AND STRUCTURE CLASSES
+TERRAIN CLASSES AND DEFINITIONS
 
-Prefer these structure names when appropriate:
+Use the most specific matching class. When uncertain, choose the more conservative (smaller, more specific) term.
 
-* floor
-* ceiling
-* hill
-* mountain
-* plateau
-* pillar
-* wall
-* staircase
-* slope
-* platform
-* bridge
-* tower
-* chamber
-* room
-* gap
+floor     - continuous ground layer at the bottom
+ceiling   - continuous ground layer at the top
+wall      - vertical column or barrier of solid tiles attached to floor or ceiling
+pillar    - narrow freestanding vertical structure (taller than wide)
+platform  - floating horizontal surface not connected to floor or ceiling
+bridge    - horizontal surface spanning a gap
+staircase - terrain rising or falling in clearly distinct steps; always add ascending or descending
+slope     - terrain rising or falling as a smooth incline without steps; always add ascending or descending
+hill      - small rounded bump in the ground, 2-5 tiles tall at its peak
+plateau   - flat elevated terrain section with steep or near-vertical sides
+tower     - tall freestanding structure (taller than wide, at least 5 tiles tall)
+mountain  - ONLY for terrain that meets ALL THREE conditions: (1) clearly peaked triangular or rounded summit, (2) peak is at least 6 tiles above the surrounding base terrain, AND (3) base is at least 8 columns wide. Verify against the metadata column heights before using this term.
+chamber   - fully or mostly enclosed space formed by terrain
+room      - large enclosed region
 
-You may create new structure names when necessary if they are:
+CRITICAL - MOUNTAIN VS OTHER TERRAIN
 
-* concrete
-* geometric
-* reusable
-* three words or fewer
+Most rising terrain in Mario Maker 2 is NOT a mountain.
 
-Examples:
+Before using mountain, check the metadata column heights. The heights must show a clear rise-and-fall pattern with a peak at least 6 units above the base and a base spanning 8+ columns.
 
-* stepped pyramid
-* zigzag staircase
-* floating bridge
-* split plateau
-* block tower
-* central arch
-
-Do not invent vague names.
-
-Bad examples:
-
-* interesting formation
-* unusual terrain
-* decorative structure
-* complex layout
+If rising terrain is stepped, use: ascending staircase
+If rising terrain is smooth, use: ascending slope
+If it is a small bump, use: hill
+If it is flat and elevated, use: plateau
+When in doubt, do NOT use mountain.
 
 DIRECTIONALITY
 
-When a structure has a clear orientation, include it.
-
-Examples:
-
-* ascending staircase
-* descending staircase
-* ascending slope
-* descending slope
-* ascending mountain
-* descending mountain
-* vertical pillar
-* horizontal platform
-
-Direction is usually more informative than size.
-
-TERRAIN INTERPRETATION
-
-Treat connected terrain as a single landform whenever possible.
-
-Describe the overall shape rather than individual rows, columns, or tile edges.
-
-Never use vague terms such as:
-
-* raised terrain
-* elevated ground
-* terrain formation
-* ceiling ledge
-* ground structure
-* tall ground blocks
-
-Always choose the closest concrete landform.
+Always add direction to staircases and slopes:
+  ascending staircase / descending staircase
+  ascending slope / descending slope
 
 SHAPE HIERARCHY
 
-When describing terrain, prioritize:
+Describe terrain as: shape, then direction, then material, then size, then position.
+  ascending staircase. hard block wall. ice block plateau. descending slope.
 
-1. shape
-2. direction
-3. material
-4. size
-5. position
+MATERIALS
 
-Examples:
-
-* ascending staircase
-* descending mountain
-* hard block wall
-* ice block plateau
-
-STRUCTURE MATERIALS
-
-Whenever a structure is primarily composed of a recognizable material, include the material.
-
-Examples:
-
-* ground mountain
-* hard block wall
-* hard block chamber
-* breakable block tower
-* note block platform
-* ice block staircase
-* spike block pillar
-
-Prefer:
-
-* hard block chamber
-
-instead of:
-
-* enclosed chamber
-
-Prefer:
-
-* breakable block tower
-
-instead of:
-
-* tower
-
-Shape is more important than material, but material should usually be included when recognizable.
-
-REGION STRUCTURE
-
-When terrain divides the level into separate areas, describe the division.
-
-Examples:
-
-* two separate sections
-* three separate sections
-* central dividing wall
-* hard block chamber
-* sealed room left
-
-Describe major regions and dividers.
-
-Do not describe how regions connect.
+Include material when the structure is primarily one recognizable tile type:
+  ground floor. hard block wall. brick staircase. note block platform. ice block plateau.
 
 OBJECT NAMING
 
-Use the most specific object name available from the dictionary.
+Use the most specific name from the dictionary.
+  Use: one goomba / one koopa troopa / one piranha plant
+  Avoid: one enemy / one hazard / one collectible
 
-Prefer:
+MULTI-TILE OBJECTS
 
-* one goomba
-* one koopa troopa
-* one piranha plant
-* one mushroom
-* one upward pipe
-
-instead of:
-
-* one enemy
-* one hazard
-* one collectible
-* one power-up
-
-Only use generic terms when no more specific name exists in the dictionary.
-
-MULTI-TILE OBJECT RECOGNITION
-
-Many Mario Maker objects occupy multiple ASCII cells.
-
-A single object may span multiple rows or columns.
-
-Examples:
-
-* a pipe that is three tiles tall is one pipe
-* a pipe that is four tiles wide is one pipe
-* a goal pole spanning many rows is one goal
-* a clear pipe spanning many cells is one clear pipe
-
-Never count ASCII cells.
-
-Count game objects.
-
-When several connected tiles form one object, count one object.
-
-Object counts are based on connected instances, not symbol frequency.
-
-STRUCTURE RECOGNITION
-
-Recognize structures before counting tiles.
-
-Examples:
-
-* line of coins
-* tower of blocks
-* ascending staircase
-* descending staircase
-* semisolid platform
-* mushroom platform
-* bridge
-* wall
-* pillar
-
-Use a structure name whenever a clear structure exists.
-
-Only fall back to object counts when no meaningful structure is present.
+Count game objects, not ASCII tiles. A pipe three tiles tall is one pipe.
 
 QUANTITIES
 
-Use:
+one / two / three / a few (3-4) / several (5-9) / many (10+)
 
-* one
-* two
-* three
-* a few (3-4)
-* several (5-9)
-* many (10+)
+Never write "one group of N" or "a cluster of N" — just write the count directly: "four enemies" not "one group of four enemies."
 
 POSITION
 
-Only include position when it helps distinguish major features.
+The metadata includes explicit left/center/right column boundaries for this level. Use those boundaries when assigning position.
 
-Allowed positions:
+Only include a position qualifier when it would genuinely help a reader tell this feature apart from another. Specifically:
 
-* left
-* center
-* right
-* upper left
-* upper center
-* upper right
-* lower left
-* lower center
-* lower right
+USE position when:
+- There are two or more instances of the same structure type that need to be distinguished (e.g., "semisolid platform left" and "semisolid platform right")
+- A feature is clearly confined to one third of the level width (e.g., a gap that occupies only the center third)
 
-Use at most one position per phrase.
+DO NOT use position when:
+- There is only one instance of the feature in the level
+- The feature spans most of the level width
+- You are guessing — omit rather than risk a wrong position
 
-ENEMY AND HAZARD PLACEMENT
+Allowed horizontal positions: left / center / right
+Allowed combined positions: upper left / upper center / upper right / lower left / lower center / lower right
 
-Enemy placement is important.
+Only use "upper" or "lower" when the object is genuinely near the top or bottom third of the level height — not just "above the floor."
 
-Whenever enemies or hazards are mentioned, also describe where they are located whenever that information is visible.
+At most one position per phrase.
 
-Placement priority:
+ENEMY PLACEMENT
 
-1. support structure
-2. airborne status
-3. coarse region
+Always say where enemies are. Priority: (1) support structure, (2) airborne, (3) coarse region.
+  one goomba on ground
+  two koopas on platform
+  one piranha plant on pipe
+  several enemies in air
 
-Examples:
+Coarse region (left/center/right) is only for enemy placement when there are enemies in different regions. Do not add a region if all enemies are in the same area as the floor or platform already described.
 
-* one goomba on ground
-* two koopas on platform
-* one piranha plant on pipe
-* one enemy on staircase
-* several enemies on semisolid platform
-* one flying enemy in air
+COLLECTIBLE PLACEMENT
 
-If an enemy is visibly supported by terrain or a structure, describe the support structure.
+When collectibles are prominent, describe placement:
+  line of coins over gap / several coins in air / one mushroom on platform
 
-If an enemy is not visibly supported, describe it as:
+AIRBORNE OBJECTS
 
-* in air
-
-Group enemies that share the same placement.
-
-Examples:
-
-* several goombas on ground
-* two koopas on platform
-* many enemies in air
-
-Do not describe exact coordinates.
-
-Do not use:
-
-* above a pipe
-* beside a block
-* next to an enemy
-
-Use support surfaces, airborne status, or coarse regions only.
-
-COLLECTIBLE AND POWER-UP PLACEMENT
-
-When collectibles or power-ups are important visible features, describe their placement.
-
-Examples:
-
-* line of coins over gap
-* several coins in air
-* one mushroom on platform
-* one key on ground
-* one fire flower in air
-
-AIRBORNE RECOGNITION
-
-Objects should only be considered airborne when they are not visibly supported by terrain, platforms, pipes, blocks, or other solid structures.
-
-Examples:
-
-* one enemy in air
-* several coins in air
-* one mushroom in air
-
-Do not use "in air" when the object rests on a visible structure.
+Use "in air" only when the object has no visible support below it.
 
 ADDITIONAL RULES
 
-* Describe only features that are present.
-* Never mention missing features.
-* Trust provided metadata over your own counting.
-* Count objects, not symbols.
-* Name structures rather than tile arrangements whenever possible.
-* Prefer concise captions over exhaustive inventories.
+* Describe only features that are present. Never mention absent features.
+* Name structures, not tile arrangements (e.g. "ascending staircase" not "blocks going up to the right").
+* Do not use size adjectives (large, small, big, tall, wide, long, short). Use structure class names and materials instead.
+* Prefer concise captions over exhaustive tile inventories.
+* If a region has no notable features beyond the floor, do not add filler phrases.
+
+---
+
+WORKED EXAMPLES
+
+Example 1:
+
+Symbol dictionary (excerpt): ' '=Air, '#'=Ground, 'g'=Goomba, '?'=Question Block, '|'=Pipe, 'up-arrow'=Pipe (Up)
+
+Metadata:
+Object tile counts:
+  Goomba: 2
+  Question Block: 2
+  Pipe (Up): 2
+  Pipe: 4
+Terrain column heights (left to right, 0=no terrain):
+  cols 01-10: 2 2 2 2 2 2 2 2 2 2
+  cols 11-20: 2 2 2 2 2 2 2 2 2 2
+Floor: present
+Ceiling: absent
+
+ASCII Level:
+
+  ?     ?
+
+  |     |
+  ^     ^
+  g         g
+####################
+####################
+
+Caption: flat ground floor. two question blocks left. two upward pipes on ground. two goombas on ground
+
+---
+
+Example 2:
+
+Symbol dictionary (excerpt): ' '=Air, '#'=Ground, 'g'=Goomba, 'B'=Brick Block
+
+Metadata:
+Object tile counts:
+  Goomba: 1
+  Brick Block: 6
+Terrain column heights (left to right, 0=no terrain):
+  cols 01-10: 2 2 2 2 2 2 2 2 2 0
+  cols 11-20: 0 0 2 3 4 5 6 7 8 0
+Floor: present, gaps at: cols 10-12
+Ceiling: absent
+
+ASCII Level:
 
 
+               #
+              ##
+             ###
+            ####
+  g  BBBBBB #####
+##########   #####
+##########   #####
 
-Dictionary:
+Caption: flat ground floor left. gap center. ascending staircase right. brick block platform center. one goomba on ground left
+
+---
+
+Symbol dictionary:
 
 {dict_string}
+
+
+Metadata:
+{metadata}
 
 
 ASCII Level:
@@ -608,6 +442,90 @@ def build_dict_string(tileset_path, char_names):
     return "\n".join(lines)
 
 
+def compute_metadata(scene, id_to_char, char_names, tileset_path):
+    """Pre-compute level metadata to anchor the LLM's terrain and object descriptions."""
+    if not scene or not scene[0]:
+        return "No metadata available."
+
+    grid = [[id_to_char.get(tid, " ") for tid in row] for row in scene]
+    nrows = len(grid)
+    ncols = len(grid[0])
+
+    basename = os.path.basename(tileset_path)
+    terrain = TERRAIN_CHARS_EXT if "extended" in basename else TERRAIN_CHARS_MM2
+
+    parts = []
+
+    # Object tile counts (skip Air and Ground to keep it readable)
+    counts = {}
+    for row in grid:
+        for ch in row:
+            if ch == " ":
+                continue
+            name = char_names.get(ch)
+            if not name or name in ("Air", "Ground"):
+                continue
+            counts[name] = counts.get(name, 0) + 1
+    if counts:
+        parts.append("Object tile counts:")
+        for name, cnt in sorted(counts.items(), key=lambda x: -x[1])[:20]:
+            parts.append(f"  {name}: {cnt}")
+
+    # Terrain column height profile: for each column, height of topmost solid tile from bottom
+    col_heights = []
+    for c in range(ncols):
+        h = 0
+        for r in range(nrows - 1, -1, -1):
+            if grid[r][c] in terrain:
+                h = nrows - r  # 1 = bottom row, nrows = top row
+                break
+        col_heights.append(h)
+
+    parts.append("\nTerrain top-of-column heights (left to right, 0=no terrain in column):")
+    for start in range(0, ncols, 10):
+        chunk = col_heights[start: start + 10]
+        end = start + len(chunk)
+        parts.append(f"  cols {start + 1:02d}-{end:02d}: {' '.join(str(h) for h in chunk)}")
+
+    # Floor analysis: does the level have a continuous floor and where are the gaps?
+    def col_has_floor(c):
+        return any(grid[r][c] in terrain for r in range(nrows - 3, nrows))
+
+    floor_mask = [col_has_floor(c) for c in range(ncols)]
+    has_floor = sum(floor_mask) > ncols * 0.35
+
+    gaps = []
+    in_gap = False
+    gap_start = 0
+    for c in range(ncols):
+        if not floor_mask[c] and not in_gap:
+            in_gap = True
+            gap_start = c + 1  # 1-indexed
+        elif floor_mask[c] and in_gap:
+            in_gap = False
+            gaps.append(f"cols {gap_start}-{c}")
+    if in_gap:
+        gaps.append(f"cols {gap_start}-{ncols}")
+
+    floor_str = "present" if has_floor else "absent"
+    if gaps:
+        floor_str += f", gaps at: {', '.join(gaps)}"
+    parts.append(f"\nFloor: {floor_str}")
+
+    # Ceiling analysis
+    ceiling_count = sum(1 for c in range(ncols) if grid[0][c] in terrain)
+    parts.append(f"Ceiling: {'present' if ceiling_count > ncols * 0.2 else 'absent'}")
+
+    # Explicit region boundaries for position labeling
+    t = ncols // 3
+    parts.append(
+        f"\nRegion boundaries (use these when assigning left/center/right):"
+        f" left=cols 1-{t}, center=cols {t+1}-{2*t}, right=cols {2*t+1}-{ncols}"
+    )
+
+    return "\n".join(parts)
+
+
 def scene_to_ascii(scene, id_to_char):
     return "\n".join(
         "".join(id_to_char.get(tid, "?") for tid in row)
@@ -622,7 +540,7 @@ def call_ollama(prompt, model, url, timeout, retries):
         "stream": False,
         "options": {
             "temperature": 0.3,
-            "num_predict": 256,
+            "num_predict": 512,
         },
     }).encode("utf-8")
 
@@ -663,6 +581,45 @@ def _write(output_path, data):
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
+def _validate_tileset_match(dataset, id_to_char, tileset_path):
+    """Abort early if the dataset's tile IDs don't fit the loaded tileset.
+
+    A common mistake is pairing a dataset built with extended_tiles.json (max ID ~22)
+    against mm2_tileset_full.json (138 tiles, different sort order), or vice versa.
+    When the IDs don't match, the ASCII fed to the LLM is completely wrong.
+    """
+    tileset_size = len(id_to_char)
+    sample_count = min(50, len(dataset))
+    max_seen = 0
+    unknown_count = 0
+
+    for item in dataset[:sample_count]:
+        scene = item["scene"] if isinstance(item, dict) else item
+        for row in scene:
+            for tid in row:
+                if tid > max_seen:
+                    max_seen = tid
+                if tid not in id_to_char:
+                    unknown_count += 1
+
+    if max_seen >= tileset_size:
+        print(
+            f"\nERROR: Tileset mismatch detected!\n"
+            f"  Tileset '{os.path.basename(tileset_path)}' has {tileset_size} tiles (IDs 0-{tileset_size-1}).\n"
+            f"  Dataset contains tile ID {max_seen}, which is out of range.\n"
+            f"  You are probably using the wrong --tileset for this dataset.\n"
+            f"  If the dataset was built with extended_tiles.json, pass --tileset extended_tiles.json.\n"
+            f"  If the dataset was built with mm2_tileset_full.json, pass --tileset mm2_tileset_full.json.\n"
+        )
+        sys.exit(1)
+
+    if unknown_count > 0:
+        print(
+            f"WARNING: {unknown_count} tile IDs in the first {sample_count} scenes "
+            f"have no mapping in the tileset. The ASCII grid may contain '?' characters."
+        )
+
+
 def generate_captions(dataset_path, tileset_path, output_path, model, url, timeout, retries):
     with open(dataset_path, "r", encoding="utf-8") as f:
         dataset = json.load(f)
@@ -670,6 +627,8 @@ def generate_captions(dataset_path, tileset_path, output_path, model, url, timeo
     id_to_char = build_id_to_char(tileset_path)
     char_names = get_char_names(tileset_path)
     dict_string = build_dict_string(tileset_path, char_names)
+
+    _validate_tileset_match(dataset, id_to_char, tileset_path)
 
     existing = load_existing(output_path)
     if existing:
@@ -693,7 +652,12 @@ def generate_captions(dataset_path, tileset_path, output_path, model, url, timeo
             continue
 
         ascii_grid = scene_to_ascii(scene, id_to_char)
-        prompt = PROMPT_TEMPLATE.format(dict_string=dict_string, ascii_grid=ascii_grid)
+        metadata = compute_metadata(scene, id_to_char, char_names, tileset_path)
+        prompt = PROMPT_TEMPLATE.format(
+            dict_string=dict_string,
+            ascii_grid=ascii_grid,
+            metadata=metadata,
+        )
 
         print(f"[{i + 1}/{total}] {name} ...", end=" ", flush=True)
         try:
@@ -732,7 +696,13 @@ def main():
     )
     parser.add_argument("--output", required=True, help="Output captioned JSON.")
     parser.add_argument(
-        "--model", default="llama3.1:8b", help="Ollama model name. Default: llama3.1:8b"
+        "--model",
+        default="qwen2.5:14b",
+        help=(
+            "Ollama model name. Default: qwen2.5:14b. "
+            "Pull with: ollama pull qwen2.5:14b. "
+            "Smaller fallback: qwen2.5:7b or llama3.1:8b."
+        ),
     )
     parser.add_argument(
         "--url",
