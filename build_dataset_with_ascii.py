@@ -159,6 +159,16 @@ def collect_input_files(input_path):
         return [p]
     sys.exit(f"ERROR: Input path not found: {input_path}")
 
+def detect_empty_char(tileset_path):
+    with open(tileset_path, encoding="utf-8") as f:
+        tiles = json.load(f)["tiles"]
+    if " " in tiles:
+        return " "
+    if "-" in tiles:
+        return "-"
+    return "-"
+
+
 def load_converter(filename, module_name):
     import importlib.util
     path = os.path.join(HERE, filename)
@@ -180,8 +190,6 @@ def main():
                                help="Convert layout to VGLC structure (ascii_to_vglc.py).")
     convert_group.add_argument("--convert_to_extended", action="store_true",
                                help="Convert layout to extended tile format (mm2view_to_extended.py).")
-    convert_group.add_argument("--include_all", action="store_true",
-                               help="Brute-force mode: skip all converters and windowing, include every level as-is.")
     parser.add_argument("--sliding_window", action="store_true",
                         help="Collect every window position as a separate sample instead of keeping only the best window.")
     parser.add_argument("--stride", type=int, default=WINDOW_W,
@@ -192,14 +200,13 @@ def main():
     if args.convert_to_extended and tileset_path == os.path.join(HERE, "smb.json"):
         tileset_path = os.path.join(HERE, "extended_tiles.json")
     tile_to_id = load_tileset(tileset_path)
+    default_empty_char = detect_empty_char(tileset_path)
 
     converter_mod = None
     if args.convert_to_vglc:
         converter_mod = load_converter("ascii_to_vglc.py", "ascii_to_vglc")
     elif args.convert_to_extended:
         converter_mod = load_converter("mm2view_to_extended.py", "mm2view_to_extended")
-    elif args.include_all:
-        print("Brute-force mode: all levels included without conversion or windowing.")
 
     input_files = collect_input_files(args.input_file)
     dataset = []
@@ -215,21 +222,16 @@ def main():
             # Prefix with the source filename so names stay unique across files
             full_name = f"{file_stem}/{name}" if len(input_files) > 1 else name
             try:
-                if args.include_all:
-                    rows = [r.rstrip('\r\n') for r in rows]
-                    # Strip leading blank rows (raw MM2 ASCII sky is all spaces)
-                    while rows and not rows[0].strip():
-                        rows.pop(0)
-                    # Take the bottom WINDOW_H rows so ground is always included
-                    if len(rows) > WINDOW_H:
-                        rows = rows[-WINDOW_H:]
-                    empty_char = " "
-                elif converter_mod is not None:
+                if converter_mod is not None:
                     rows = converter_mod.convert_level(rows)
                     empty_char = "-"
                 else:
                     rows = [r.rstrip('\r\n') for r in rows]
-                    empty_char = "-"
+                    while rows and not rows[0].strip():
+                        rows.pop(0)
+                    if len(rows) > WINDOW_H:
+                        rows = rows[-WINDOW_H:]
+                    empty_char = default_empty_char
 
                 if args.sliding_window:
                     scenes = extract_all_windows(rows, tile_to_id, stride=args.stride, empty_char=empty_char)
