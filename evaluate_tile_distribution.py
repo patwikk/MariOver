@@ -34,7 +34,6 @@ def parse_args():
 
 
 # Authoritative MM2 char→name mapping sourced from OBJ_META in mm2_viewer_json.py.
-# Can't import that file directly (it pulls in tkinter), so the names are mirrored here.
 _MM2_OBJ_NAMES = {
     # terrain
     "#": "Ground",          "B": "Block",               "H": "Hard Block",
@@ -102,8 +101,8 @@ _SKIP_DESCRIPTORS = {"solid", "passable", "moving", "damaging", "hazard", "enemy
 def build_char_to_name(tileset_path):
     """
     Return a dict mapping each tile char to a unique human-readable name.
-    Uses _MM2_OBJ_NAMES when available (authoritative); falls back to
-    descriptor-based heuristics for tilesets not covered by that dict.
+    Prefers the tileset's own descriptor-based names; falls back to
+    _MM2_OBJ_NAMES only when descriptors yield purely generic terms.
     Disambiguates any remaining duplicates by appending the char.
     """
     with open(tileset_path, 'r', encoding='utf-8') as f:
@@ -123,10 +122,17 @@ def build_char_to_name(tileset_path):
 
     raw_names = {}
     for char, descriptors in tileset['tiles'].items():
-        if char in _MM2_OBJ_NAMES:
+        name_from_desc = pick_name_from_descriptors(descriptors)
+        # Use descriptors when they yield a specific, non-generic name.
+        # Fall back to _MM2_OBJ_NAMES only when descriptors give nothing but
+        # skip-listed terms (e.g. MM2 enemies whose only attributes are
+        # "enemy"/"moving"/"hazard" and need a real name like "Goomba").
+        if name_from_desc and name_from_desc not in _SKIP_DESCRIPTORS:
+            raw_names[char] = name_from_desc
+        elif char in _MM2_OBJ_NAMES:
             raw_names[char] = _MM2_OBJ_NAMES[char]
         else:
-            raw_names[char] = pick_name_from_descriptors(descriptors) or char
+            raw_names[char] = name_from_desc or char
 
     # Disambiguate: when two chars share a raw name, append (char) to both
     name_count = Counter(raw_names.values())
@@ -248,11 +254,18 @@ def main():
 
     tile_chars, id_to_char, _, _ = extract_tileset(args.tileset)
     char_to_name = build_char_to_name(args.tileset)
-    # Unique ordered tile names — no duplicates, no padding tile
+
+    # Determine whether '_' is a real tile in this tileset or just the padding
+    # sentinel appended by extract_tileset for tilesets that lack it.
+    with open(args.tileset, 'r', encoding='utf-8') as _f:
+        _underscore_is_padding = '_' not in json.load(_f)['tiles']
+
+    # Unique ordered tile names — no duplicates; skip '_' only when it is the
+    # padding sentinel (not a real tile in the JSON).
     seen = set()
     tile_names = []
     for c in tile_chars:
-        if c == '_':
+        if c == '_' and _underscore_is_padding:
             continue
         name = char_to_name.get(c, c)
         if name not in seen:

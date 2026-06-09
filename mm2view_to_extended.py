@@ -23,7 +23,7 @@ Output characters
     B   cannon top
     b   cannon bottom
     =   bridge (passable bridge platform)
-    _   semisolid platform (pass-through from below)
+    _   semisolid platform
     W   stone block
     F   fire flower
     T   thwomp
