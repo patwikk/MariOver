@@ -76,7 +76,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo === Step 3: Training diffusion model ===
-python train_diffusion.py --game %GAME% --save_image_epochs 1000 --augment --text_conditional --output_dir "%DIFF_OUTPUT%" --num_epochs 500 --json datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --pkl datasets\%GAME%_Tokenizer-%TYPE%.pkl --mlm_model_dir %MLM_OUTPUT% --seed %SEED% < "%YES_FILE%"
+python train_diffusion.py --game %GAME% --save_image_epochs 1000 --augment --text_conditional --output_dir "%DIFF_OUTPUT%" --num_epochs 100 --json datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --pkl datasets\%GAME%_Tokenizer-%TYPE%.pkl --mlm_model_dir %MLM_OUTPUT% --seed %SEED% < "%YES_FILE%"
 if %ERRORLEVEL% neq 0 (
     echo ERROR: train_diffusion.py failed.
     exit /b 1

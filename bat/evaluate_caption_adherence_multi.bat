@@ -1,4 +1,5 @@
 @echo off
+setlocal
 REM Usage: evaluate_caption_adherence_multi.bat <model_path> <type> <game>
 REM <type> should be "regular" or "absence"
 REM <game> should be "SMB1", "SMB2", "Mar1and2", etc.
