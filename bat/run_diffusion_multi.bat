@@ -21,5 +21,5 @@ if /I "%GAME%"=="MM" set TILESET=extended_tiles.json
 
 set UNCOND_OUTPUT=%MODEL_PATH%-unconditional-samples
 
-python run_diffusion.py --model_path %MODEL_PATH% --num_samples 100 --save_as_json --tileset %TILESET% --output_dir "%UNCOND_OUTPUT%-short"
-python run_diffusion.py --model_path %MODEL_PATH% --num_samples 100 --save_as_json --tileset %TILESET% --output_dir "%UNCOND_OUTPUT%-long" --level_width 128
+python run_diffusion.py --model_path %MODEL_PATH% --num_samples 100 --save_as_json --output_format image --tileset %TILESET% --output_dir "%UNCOND_OUTPUT%-short"
+python run_diffusion.py --model_path %MODEL_PATH% --num_samples 100 --save_as_json --output_format image --tileset %TILESET% --output_dir "%UNCOND_OUTPUT%-long" --level_width 128

@@ -35,6 +35,11 @@ set CAPTIONED_OUTPUT=datasets\%GAME%_LevelsAndCaptions-%TYPE%.json
 set MLM_OUTPUT=%GAME%-MLM-%TYPE%%SEED%
 set DIFF_OUTPUT=%GAME%-conditional-%TYPE%%SEED%
 
+REM Used to auto-answer "y" to train_diffusion.py's resume-from-checkpoint prompt.
+REM A redirected file (rather than a pipe) keeps %ERRORLEVEL% checks working afterward.
+set YES_FILE=%TEMP%\mariover_yes.txt
+echo y> "%YES_FILE%"
+
 REM -- Ollama setup ---------------------------------------------------------
 ollama list >nul 2>&1
 if %ERRORLEVEL% neq 0 (
@@ -71,14 +76,14 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo === Step 3: Training diffusion model ===
-echo y| python train_diffusion.py --game %GAME% --save_image_epochs 1000 --augment --text_conditional --output_dir "%DIFF_OUTPUT%" --num_epochs 500 --json datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --pkl datasets\%GAME%_Tokenizer-%TYPE%.pkl --mlm_model_dir %MLM_OUTPUT% --seed %SEED%
+python train_diffusion.py --game %GAME% --save_image_epochs 1000 --augment --text_conditional --output_dir "%DIFF_OUTPUT%" --num_epochs 500 --json datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --pkl datasets\%GAME%_Tokenizer-%TYPE%.pkl --mlm_model_dir %MLM_OUTPUT% --seed %SEED% < "%YES_FILE%"
 if %ERRORLEVEL% neq 0 (
     echo ERROR: train_diffusion.py failed.
     exit /b 1
 )
 
 echo === Step 4: Running diffusion generation ===
-call bat\run_diffusion_multi.bat "%DIFF_OUTPUT%" %TYPE% %GAME%
+call bat\run_diffusion_multi.bat "%DIFF_OUTPUT%" %TYPE% %GAME% 
 if %ERRORLEVEL% neq 0 (
     echo ERROR: run_diffusion_multi.bat failed.
     exit /b 1

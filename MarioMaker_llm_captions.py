@@ -409,7 +409,7 @@ Metadata:
 ASCII Level:
 {ascii_grid}
 
-Write the caption."""
+Write the caption. DO NOT INCLUDE ANY NON ENGLISH CHARACTERS."""
 
 
 # ── Core helpers ──────────────────────────────────────────────────────────────
