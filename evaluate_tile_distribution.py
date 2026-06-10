@@ -207,6 +207,22 @@ def count_tiles(scenes, id_to_char, char_to_name):
     return dict(counts)
 
 
+def count_scene_presence(scenes, id_to_char, char_to_name):
+    """Count, for each tile name, how many scenes contain at least one occurrence
+    of that tile (regardless of how many times it appears in that scene)."""
+    counts = defaultdict(int)
+    for scene in scenes:
+        present = set()
+        for row in scene:
+            for tile_id in row:
+                char = id_to_char.get(tile_id, '_')
+                name = char_to_name.get(char, char)
+                present.add(name)
+        for name in present:
+            counts[name] += 1
+    return dict(counts)
+
+
 def write_distribution(path, header, counts, total, tile_names):
     """Write a readable distribution file sorted by frequency."""
     present = [(n, counts.get(n, 0)) for n in tile_names if counts.get(n, 0) > 0]
@@ -220,6 +236,42 @@ def write_distribution(path, header, counts, total, tile_names):
             f.write(f"{name:<{col_width}}: {count:>8}  ({pct:5.1f}%)\n")
         f.write("=" * (col_width + 30) + "\n")
         f.write(f"{'Total':<{col_width}}: {total:>8}\n")
+
+
+def plot_scene_presence(history, tile_names, out_path):
+    """Plot the number of scenes containing each tile type, one line per tile,
+    with epoch (checkpoint index) on the x-axis."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    if not history:
+        return
+
+    epochs = [entry["epoch"] for entry in history]
+
+    # Only plot tiles that show up in at least one checkpoint
+    active_names = [
+        name for name in tile_names
+        if any(entry["presence"].get(name, 0) > 0 for entry in history)
+    ]
+    if not active_names:
+        return
+
+    fig, ax = plt.subplots(figsize=(14, 9))
+    cmap = plt.get_cmap("tab20")
+    for i, name in enumerate(active_names):
+        values = [entry["presence"].get(name, 0) for entry in history]
+        ax.plot(epochs, values, label=name, color=cmap(i % 20), marker='o', markersize=3, linewidth=1)
+
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Number of scenes containing tile")
+    ax.set_title("Scene-Level Tile Presence Across Checkpoints")
+    ncol = max(1, (len(active_names) + 29) // 30)
+    ax.legend(loc='center left', bbox_to_anchor=(1.01, 0.5), fontsize='x-small', ncol=ncol)
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches='tight')
+    plt.close(fig)
 
 
 def collect_checkpoint_dirs(model_path):
@@ -294,6 +346,10 @@ def main():
         total_counts = defaultdict(int)
         total_tiles = 0
 
+        presence_history = []
+        presence_history_path = os.path.join(out_root, "scene_presence_history.json")
+        created_files.append(presence_history_path)
+
         for epoch, checkpoint_dir in tqdm(checkpoint_dirs, desc="Evaluating checkpoints"):
             print(f"\nCheckpoint {epoch}: {checkpoint_dir}")
             pipe = get_pipeline(checkpoint_dir).to(device)
@@ -315,15 +371,23 @@ def main():
             counts = count_tiles(scenes, id_to_char, char_to_name)
             total = sum(counts.values())
 
+            presence_counts = count_scene_presence(scenes, id_to_char, char_to_name)
+            num_scenes = len(scenes)
+
             # Per-checkpoint folder and file
             ckpt_dir = os.path.join(out_root, f"checkpoint-{epoch}")
             os.makedirs(ckpt_dir)
             created_dirs.append(ckpt_dir)
 
             dist_path = os.path.join(ckpt_dir, "distribution.txt")
-            header = f"Checkpoint {epoch} — Tile Distribution ({len(scenes)} samples, {total} tiles)"
+            header = f"Checkpoint {epoch} — Tile Distribution ({num_scenes} samples, {total} tiles)"
             write_distribution(dist_path, header, counts, total, tile_names)
             created_files.append(dist_path)
+
+            presence_path = os.path.join(ckpt_dir, "scene_presence.txt")
+            presence_header = f"Checkpoint {epoch} — Scene Presence ({num_scenes} samples)"
+            write_distribution(presence_path, presence_header, presence_counts, num_scenes, tile_names)
+            created_files.append(presence_path)
 
             # Print quick summary to console
             summary = "  ".join(
@@ -336,6 +400,14 @@ def main():
                 total_counts[name] += count
             total_tiles += total
 
+            presence_history.append({
+                "epoch": epoch,
+                "num_scenes": num_scenes,
+                "presence": presence_counts,
+            })
+            with open(presence_history_path, 'w') as f:
+                json.dump(presence_history, f, indent=2)
+
             del pipe
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -343,6 +415,10 @@ def main():
         header = f"Total Distribution Across All Checkpoints ({total_tiles} tiles)"
         write_distribution(total_path, header, total_counts, total_tiles, tile_names)
         created_files.append(total_path)
+
+        plot_path = os.path.join(out_root, "scene_presence_plot.png")
+        plot_scene_presence(presence_history, tile_names, plot_path)
+        created_files.append(plot_path)
 
         print(f"\nDone. Results saved to: {out_root}")
 
