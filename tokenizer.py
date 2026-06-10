@@ -6,7 +6,7 @@ import argparse
 
 class Tokenizer:
     def __init__(self):
-        self.special_tokens = ["[PAD]", "[MASK]"]
+        self.special_tokens = ["[PAD]", "[MASK]", "[UNK]"]
         self.vocab = {}
         self.token_to_id = {}
         self.id_to_token = {}
@@ -54,12 +54,8 @@ class Tokenizer:
 
     def encode(self, text):
         tokens = self.tokenize(text)
-        encoded = []
-        for tok in tokens:
-            if tok not in self.token_to_id:
-                raise ValueError(f"Unknown token encountered: {tok} in {text}")
-            encoded.append(self.token_to_id[tok])
-        return encoded
+        unk_id = self.token_to_id["[UNK]"]
+        return [self.token_to_id.get(tok, unk_id) for tok in tokens]
 
     def encode_batch(self, texts, pad_to_length=None):
         """
@@ -77,13 +73,7 @@ class Tokenizer:
         pad_token = self.token_to_id["[PAD]"]
     
         # First encode all texts
-        encoded_texts = []
-        for text in texts:
-            try:
-                encoded = self.encode(text)
-                encoded_texts.append(encoded)
-            except ValueError as e:
-                raise ValueError(f"Error encoding text: {text}. {str(e)}")
+        encoded_texts = [self.encode(text) for text in texts]
     
         # Determine padding length
         if pad_to_length is None:
