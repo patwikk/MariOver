@@ -1,4 +1,4 @@
-REM @echo off
+@echo off
 REM Usage: run_diffusion_multi.bat <model_path> <type> <game>
 REM <type> should be "regular"
 REM <game> should be "MM", "SMB1", etc. Used to select the correct tileset.

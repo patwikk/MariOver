@@ -1,0 +1,16 @@
+1. Extract BCD's and Translate them into .json and ASCII (OPTIONAL)
+	(This step is irrelevant if you already have a folder with ASCIIs or .jsons) 
+
+	Command Line:
+	cd bat
+	extract_levels_to_ascii.bat (get levels with the title x) (number of levels wanted) (folder to output everything)
+
+	Once run your folder will have 4 folders, with the bcd's, the .json's, the direct images of the .jsons, and the ASCII representations of these levels.
+
+2. Use ASCII folder to run the full pipeline
+	Once you have a folder full of ASCII files, the rest is simple.
+
+	Command Line: 
+	cd bat
+	run_full_pipeline.bat (ascii folder) (model, optional and defaults to qwen2.5:14b)
+	(The other command line arguments are irrelevant and will only mess things up)

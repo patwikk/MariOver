@@ -1,4 +1,4 @@
-REM @echo off
+@echo off
 REM Usage: prepare-mario-maker.bat <input> [seed]
 REM <input> is a path to a .txt ASCII level file or a folder of .txt files
 REM [seed] is optional, defaults to 0
