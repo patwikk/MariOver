@@ -44,7 +44,7 @@ def encode_token_captions(captions, tokenizer, max_length, device='cpu'):
 # Transformer model for MLM training
 
 class TransformerModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, tokenizer=None, num_heads=8, num_layers=4, max_seq_length=100):
+    def __init__(self, vocab_size, embedding_dim, hidden_dim, tokenizer=None, num_heads=8, num_layers=4, max_seq_length=512):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.vocab_size = vocab_size

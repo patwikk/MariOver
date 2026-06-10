@@ -625,7 +625,7 @@ class LevelDataset(Dataset):
     def _augment_caption(self, caption):
         """Shuffles period-separated phrases in the caption."""
         if self.augment:
-            phrases = caption[:-1].split(". ") # [:-1] removes the last period
+            phrases = caption.rstrip(".").split(". ") # strip trailing period if present
             random.shuffle(phrases)  # Shuffle phrases
             return ". ".join(phrases) + "."
         else:
