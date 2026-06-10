@@ -33,7 +33,7 @@ def world_size(json_path):
     except Exception:
         return 0
 
-def batch_convert(exe, input_dir, output_dir, min_objects,
+def batch_convert(exe, input_dir, output_dir, images_dir, min_objects,
                   remove_grid, objects_over_pipes):
     bcd_files = [f for f in os.listdir(input_dir) if f.lower().endswith(".bcd")]
     if not bcd_files:
@@ -41,7 +41,8 @@ def batch_convert(exe, input_dir, output_dir, min_objects,
         return
 
     os.makedirs(output_dir, exist_ok=True)
-    print_info(f"Processing {len(bcd_files)} file(s) -> {output_dir}")
+    os.makedirs(images_dir, exist_ok=True)
+    print_info(f"Processing {len(bcd_files)} file(s) -> {output_dir} (json) / {images_dir} (images)")
     print("-" * 60)
 
     ok = skipped = failed = 0
@@ -50,8 +51,8 @@ def batch_convert(exe, input_dir, output_dir, min_objects,
         stem      = os.path.splitext(filename)[0]
         ow_json   = os.path.join(output_dir, f"{stem}_overworld.json")
         sub_json  = os.path.join(output_dir, f"{stem}_subworld.json")
-        ow_png    = os.path.join(output_dir, f"{stem}_overworld.png")
-        sub_png   = os.path.join(output_dir, f"{stem}_subworld.png")
+        ow_png    = os.path.join(images_dir, f"{stem}_overworld.png")
+        sub_png   = os.path.join(images_dir, f"{stem}_subworld.png")
 
         cmd = [exe, "-p", bcd_path,
                "--overworldJson", ow_json, "--subworldJson", sub_json,
@@ -92,7 +93,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Batch convert SMM2 .bcd level files to JSON and PNG images.")
     parser.add_argument("folder",               help="Folder containing .bcd files")
-    parser.add_argument("-o", "--output",       help="Output folder (default: <folder>/json/)")
+    parser.add_argument("-o", "--output",       help="JSON output folder (default: <folder>/json/)")
+    parser.add_argument("--images-output",      help="PNG output folder (default: <folder>/images/)")
     parser.add_argument("--min-objects",        type=int, default=1,
                         help="Minimum object+ground count to keep a subworld (default: 1)")
     parser.add_argument("--remove-grid",        action="store_true", help="Render without grid")
@@ -109,7 +111,8 @@ if __name__ == "__main__":
     print_success(f"Using exe: {exe}")
 
     output_dir = args.output or os.path.join(args.folder, "json")
-    batch_convert(exe, args.folder, output_dir,
+    images_dir = args.images_output or os.path.join(args.folder, "images")
+    batch_convert(exe, args.folder, output_dir, images_dir,
                   min_objects=args.min_objects,
                   remove_grid=args.remove_grid,
                   objects_over_pipes=args.objects_over_pipes)
