@@ -144,11 +144,7 @@ def parse_source_file(file_path):
     if not levels:
         rows = []
         for line in lines:
-            cleaned = line.strip()
-            if cleaned.startswith("{{{") or cleaned.startswith("}}}"):
-                continue
-            if cleaned:
-                rows.append(line)
+            rows.append(line)
 
         if rows:
             levels["source_0"] = rows
@@ -207,6 +203,10 @@ def main():
     if args.convert_to_extended and tileset_path == os.path.join(HERE, "smb.json"):
         tileset_path = os.path.join(HERE, "extended_tiles.json")
     tile_to_id, extra_tile = load_tileset(tileset_path)
+
+    print(sorted(tile_to_id.items(), key=lambda x: x[1]))
+
+
     default_empty_char = detect_empty_char(tileset_path)
 
     converter_mod = None
@@ -221,9 +221,22 @@ def main():
     skipped = 0
 
     for input_file in input_files:
+        raw_text = input_file.read_bytes()
+        print(f"First 200 bytes: {raw_text[:200]}")
+        print(f"Encoding hint: {raw_text[:3]}")  # Check for BOM
+        break
+
+    for input_file in input_files:
         raw_levels = parse_source_file(input_file)
         file_stem = input_file.stem
         print(f"Parsing content from {input_file}...")
+
+
+        for name, rows in raw_levels.items():
+            print(f"  Level '{name}': {len(rows)} rows")
+            print(f"  First row repr: {repr(rows[0]) if rows else 'EMPTY'}")
+            print(f"  Row 10 repr: {repr(rows[10]) if len(rows) > 10 else 'NOT ENOUGH ROWS'}")
+            break  # just check the first level
 
         for name, rows in raw_levels.items():
             # Prefix with the source filename so names stay unique across files
@@ -231,7 +244,8 @@ def main():
             try:
                 if converter_mod is not None:
                     rows = converter_mod.convert_level(rows)
-                    empty_char = "-"
+                    empty_char = " "
+                    print("SAMPLE ROW:", repr(rows[10]))  # print a middle row
                 else:
                     rows = [r.rstrip('\r\n') for r in rows]
                     while rows and not rows[0].strip():
