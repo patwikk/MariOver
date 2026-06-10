@@ -90,7 +90,7 @@ MM2_BRIDGE         = {"·"}                   # bridge → =
 MM2_SEMISOLID      = {"´", "Â"}             # semisolid / half-collision platform → _
 MM2_STONE          = {"S"}                   # stone block → W
 MM2_FIRE_FLOWER    = {"i"}                   # fire flower → F
-MM2_BREAKABLE_NB   = {"h", "d", "Ã"}         # hidden block, donut block, falling platform → N
+MM2_BREAKABLE_NB   = {"d", "Ã"}             # donut block, falling platform → N
 
 MM2_GOOMBA         = {"g"}                   # goomba → E (explicit so it's documented)
 MM2_THWOMP         = {"t"}                   # thwomp → T
