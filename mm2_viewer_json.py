@@ -20,7 +20,7 @@ from tkinter import ttk, filedialog, messagebox
 import json, sys, os, math, re
 
 try:
-    from PIL import Image, ImageDraw, ImageTk
+    from PIL import Image, ImageTk
     _PIL_OK = True
 except ImportError:
     _PIL_OK = False
@@ -183,6 +183,10 @@ OBJ_META = {
 GROUND_COLOR = "#8B6914"
 GROUND_CHAR  = "#"
 
+# Cell that toost's render shows as occupied but no object's heuristic
+# bbox claims — keeps the ASCII silhouette pixel-faithful to toost.
+UNKNOWN_CHAR = "▒"
+
 CAT_COLORS = {
     CAT_TERRAIN:  "#C8A050",
     CAT_ENEMY:    "#CC4444",
@@ -195,62 +199,6 @@ CAT_COLORS = {
 }
 
 # ---------------------------------------------------------------------------
-# Sprite support
-# ---------------------------------------------------------------------------
-# Maps display names (keys of OBJ_META) to the game's internal object ID.
-# These IDs correspond to OBJ_N in LevelData.hpp where N * 32768 = enum value.
-NAME_TO_GAME_ID = {
-    "Ground": 7,    "Block": 4,         "Hard Block": 6,     "? Block": 5,
-    "Hidden Block": 29, "Note Block": 23, "Donut Block": 21,  "Ice Block": 63,
-    "P Block": 79,  "ON/OFF Block": 99, "Dotted-Line Block": 100,
-    "Blinking Block": 108, "Spike Block": 110, "Crate": 112,  "Stone": 75,
-    "Goal Ground": 26, "Starting Brick": 37, "Castle Bridge": 49,
-    "Tree": 106,    "Slight Slope": 87, "Steep Slope": 88,
-    "Pipe": 9,      "Door": 55,         "Warp Box": 97,       "Key": 95,
-    "Checkpoint Flag": 90, "Goal": 27,  "Clear Pipe": 93,
-    "Goomba": 0,    "Koopa": 1,         "Piranha Plant": 2,   "Hammer Bro": 3,
-    "Thwomp": 12,   "Bob-omb": 15,      "Spiny": 25,          "Buzzy Beetle": 28,
-    "Lakitu": 30,   "Lakitu's Cloud": 31, "Banzai Bill": 32,
-    "Bullet Bill Blaster": 13, "Magikoopa": 39, "Spike Top": 40,
-    "Boo": 41,      "Bowser": 62,       "Bowser Jr.": 98,     "Chain Chomp": 61,
-    "Cheep Cheep": 56, "Blooper": 48,   "Wiggler": 52,        "Pokey": 78,
-    "Piranha Creeper": 107, "Porcupuffer": 114, "Fish Bone": 103,
-    "Lava Bubble": 60, "Rocky Wrench": 58, "Muncher": 57,
-    "Ant Trooper": 96, "Monty Mole": 102, "Mechakoopa": 111,  "Boom Boom": 77,
-    "Dry Bones": 46, "Skipsqueak": 51, "Stingby": 65,         "Angry Sun": 104,
-    "Charvaargh": 86, "Bully": 117,
-    "Lemmy": 120,   "Morton": 121,      "Larry": 122,         "Wendy": 123,
-    "Iggy": 124,    "Roy": 125,         "Ludwig": 126,
-    "Coin": 8,      "Red Coin": 92,     "Large Coin": 70,     "1-Up Mushroom": 33,
-    "Fire Flower": 34, "Super Star": 35, "Super Mushroom": 20, "Big Mushroom": 44,
-    "SMB2 Mushroom": 81, "Super Hammer": 116, "P Switch": 18, "POW Block": 19,
-    "Spring": 10,   "Goomba's Shoe": 45, "Cannon Box": 127,  "Propeller Box": 128,
-    "Goomba Mask": 129, "Bullet Bill Mask": 130, "Red POW Box": 131,
-    "Lift": 11,     "Mushroom Platform": 14, "Semisolid Platform": 16,
-    "Bridge": 17,   "Lava Lift": 36,    "Snake Block": 84,    "Track Block": 85,
-    "Conveyor Belt": 94, "Fast Conveyor Belt": 53, "Sprint Platform": 80,
-    "Seesaw": 91,   "Swinging Claw": 105, "ON/OFF Trampoline": 132,
-    "Mushroom Trampoline": 113, "Jumping Machine": 50,
-    "Half-Collision Platform": 71, "Donut": 82,
-    "Fire Bar": 24, "Saw": 68,          "Burner": 54,         "Spikes": 43,
-    "Spike Ball": 74, "Skewer": 83,     "Twister": 76,        "Icicle": 118,
-    "Cloud": 22,    "Vine": 64,         "Water Marker": 101,  "Arrow": 66,
-    "One-Way Wall": 67, "Reel Camera": 89, "Sound Effect": 109,
-    "Player": 69,   "Clown Car": 42,    "Koopa Clown Car": 72, "Track": 59,
-    "Starting Arrow": 38, "Cannon": 47, "! Block": 119,
-}
-
-# Normalise various gamestyle representations → LevelData.hpp enum name
-_GS_NORM = {
-    "smb1": "SMB1", "smb 1": "SMB1", "smb_1": "SMB1",
-    "smb3": "SMB3", "smb 3": "SMB3", "smb_3": "SMB3",
-    "smw":  "SMW",
-    "nsmbu":"NSMBU",
-    "sm3dw":"SM3DW", "sm3d world": "SM3DW",
-}
-_GS_INT = {12621: "SMB1", 13133: "SMB3", 22349: "SMW", 21847: "NSMBU", 22323: "SM3DW"}
-
-
 def get_meta(name: str):
     return OBJ_META.get(name, OBJ_META["_unknown"])
 
@@ -308,6 +256,7 @@ _LEFT_ANCHOR = frozenset({
     "Ground",
     "Starting Brick",
     "Goal",
+    "Track",
 })
 
 
@@ -359,6 +308,17 @@ def obj_anchor(obj: dict):
 # Slope tile iterator
 # ---------------------------------------------------------------------------
 _SLOPE_NAMES = frozenset({"Slight Slope", "Steep Slope"})
+
+# Burner (id 54) flame direction, keyed by flag % 0x100 — derived from
+# LevelDrawer::DrawFire's per-case sprite placement (OBJ_54A1/A3/A5/A7 and
+# their 0x44/0x4C/0x54/0x5C "moving" variants share the same offsets). The
+# flame is a 3-tile jet extending from the burner's edge in this direction.
+_BURNER_FLAME_DIR = {
+    0x40: 'U', 0x44: 'U',
+    0x48: 'R', 0x4C: 'R',
+    0x50: 'D', 0x54: 'D',
+    0x58: 'L', 0x5C: 'L',
+}
 
 def slope_tiles(obj: dict):
     """
@@ -444,18 +404,20 @@ class MM2Viewer(tk.Tk):
         self.show_grid    = tk.BooleanVar(value=True)
         self.show_labels  = tk.BooleanVar(value=True)
         self.ascii_mode   = tk.BooleanVar(value=False)
-        self.sprite_mode  = tk.BooleanVar(value=False)
+        self.toost_mode   = tk.BooleanVar(value=True)
         self._cat_vars    = {}
         self._tooltip_win = None
 
-        # Sprite rendering state
-        self._sprite_map  = None   # {(obj_enum_name, gs_name): (x, y, w, h)}
-        self._sheet       = None   # PIL Image of spritesheet
-        self._spr_cache   = {}     # {(name, gs, w_px, h_px): PIL Image | None}
-        self._photo_ref   = None   # keep PhotoImage alive
+        # Toost drawing_instructions replay state
+        self._id_to_sprite   = {}   # {combined_id: (x, y, w, h)} from LevelData.hpp ObjectLocation
+        self._spritesheet    = None # PIL Image of img/spritesheet.png
+        self._tile_sheet_cache = {} # {basename: PIL Image | None}
+        self._toost_cache    = {}   # {level_idx: PIL Image (native res) | None}
+        self._occ_cache      = {}   # {level_idx: [[bool]] pixel-occupancy grid | None}
+        self._photo_ref      = None # keep PhotoImage alive
 
         self._build_ui()
-        self._load_sprites()
+        self._load_level_data()
 
     # ------------------------------------------------------------------ UI --
     def _build_ui(self):
@@ -476,7 +438,7 @@ class MM2Viewer(tk.Tk):
                  command=lambda _: self._on_zoom(), showvalue=True, length=120).pack(side=tk.LEFT)
 
         ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        tk.Checkbutton(tb, text="Sprites", variable=self.sprite_mode,
+        tk.Checkbutton(tb, text="Toost Render", variable=self.toost_mode,
                        command=self._redraw).pack(side=tk.LEFT, padx=4)
         ttk.Separator(tb, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         tk.Checkbutton(tb, text="ASCII mode", variable=self.ascii_mode,
@@ -553,6 +515,23 @@ class MM2Viewer(tk.Tk):
                 "y":    g["y"] * 160,
                 "w":    1,
                 "h":    1,
+            })
+
+        # 1b. Track rails. LevelDrawer::DrawTrack draws a 3x3-tile graphic
+        # centered on (x, y) for type < 8, or a 5x5 graphic offset to
+        # cols [x-1, x+3] / rows [y-1, y+3] for type >= 8 ("Y" junctions).
+        # Connector tiles linking adjacent track pieces always fall inside
+        # that box, so the box is enough for occ-gating to pick out the
+        # real rail shape.
+        for t in lvl.get("track", []):
+            tx, ty = t.get("x", 0), t.get("y", 0)
+            size = 3 if t.get("type", 0) < 8 else 5
+            objects.append({
+                "name": "Track",
+                "x":    (tx - 1) * 160,
+                "y":    (ty - 1) * 160,
+                "w":    size,
+                "h":    size,
             })
 
         # Determine overworld vs subworld (C++ NowIO check).
@@ -659,6 +638,8 @@ class MM2Viewer(tk.Tk):
                 
             self.levels = data
             self.current_idx = 0
+            self._toost_cache.clear()
+            self._occ_cache.clear()
             self._redraw()
         except Exception as e:
             messagebox.showerror("Load error", str(e))
@@ -685,7 +666,6 @@ class MM2Viewer(tk.Tk):
 
     def _on_zoom(self):
         self.tile_size = self.zoom_var.get()
-        self._spr_cache.clear()
         self._redraw()
 
     def _active_cats(self):
@@ -693,126 +673,206 @@ class MM2Viewer(tk.Tk):
 
     # --------------------------------------------------------------- drawing --
 
-    def _load_sprites(self):
+    def _load_level_data(self):
+        """Parse LevelData.hpp's ObjectLocation map and load img/spritesheet.png.
+
+        ObjectLocation entries look like ``{ OBJ_27 | SMB1, { 1760, 224, 16, 176 } }``.
+        Every enum constant in the file is a plain ``NAME = NUMBER`` line, so the
+        whole table can be flattened and the map keys (NAME or NAME | NAME) can be
+        evaluated with a simple bitwise OR. The resulting {int: (x, y, w, h)} table
+        is exactly what's needed to resolve the numeric `path` ids used by
+        is_tile=false drawing_instructions (see _render_toost_image).
+        """
+        self._id_to_sprite = {}
+        self._spritesheet  = None
         if not _PIL_OK:
             return
+
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        hpp_path   = os.path.join(script_dir, "LevelData.hpp")
-        sheet_path = os.path.join(script_dir, "img", "spritesheet.png")
-        if not (os.path.exists(hpp_path) and os.path.exists(sheet_path)):
+        hpp_path = next((p for p in (
+            os.path.join(script_dir, "LevelData.hpp"),
+            os.path.join(script_dir, "toost_stuff", "LevelData.hpp"),
+            os.path.join(script_dir, "toost_stuff", "src", "LevelData.hpp"),
+            os.path.join(script_dir, "..", "toost", "src", "LevelData.hpp"),
+        ) if os.path.exists(p)), None)
+        sheet_path = next((p for p in (
+            os.path.join(script_dir, "img", "spritesheet.png"),
+            os.path.join(script_dir, "toost_stuff", "img", "spritesheet.png"),
+        ) if os.path.exists(p)), None)
+        if not hpp_path or not sheet_path:
             return
-        with open(hpp_path, "r") as fh:
+
+        with open(hpp_path, "r", encoding="utf-8") as fh:
             hpp = fh.read()
-        # Parse ObjectLocation: { OBJ_xxx | GS_yyy, { x, y, w, h } }
-        pat = re.compile(
-            r'\{\s*(\w+)\s*\|\s*(\w+)\s*,\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}\s*\}'
+
+        # Flatten every `NAME = NUMBER,` enum constant (Object, Gamestyle, etc.)
+        const_map = {}
+        for m in re.finditer(r'^\s*([A-Za-z_]\w*)\s*=\s*(-?\d+)\s*,?\s*$', hpp, re.M):
+            const_map[m.group(1)] = int(m.group(2))
+
+        # ObjectLocation entries: { NAME [| NAME], { x, y, w, h } }
+        entry_pat = re.compile(
+            r'\{\s*([A-Za-z_]\w*)(?:\s*\|\s*([A-Za-z_]\w*))?\s*,'
+            r'\s*\{\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\}\s*\}'
         )
-        smap = {}
-        for m in pat.finditer(hpp):
-            smap[(m.group(1), m.group(2))] = (
-                int(m.group(3)), int(m.group(4)),
-                int(m.group(5)), int(m.group(6)),
-            )
-        self._sprite_map = smap
-        self._sheet = Image.open(sheet_path).convert("RGBA")
+        id_to_sprite = {}
+        for a, b, x, y, w, h in entry_pat.findall(hpp):
+            if a not in const_map:
+                continue
+            key = const_map[a]
+            if b:
+                if b not in const_map:
+                    continue
+                key |= const_map[b]
+            id_to_sprite[key] = (int(x), int(y), int(w), int(h))
 
-    def _resolve_gs(self, raw) -> str:
-        if isinstance(raw, int):
-            return _GS_INT.get(raw, "NSMBU")
-        s = str(raw).strip().lower()
-        return _GS_NORM.get(s, _GS_NORM.get(s.replace(" ", ""), "NSMBU"))
+        self._id_to_sprite = id_to_sprite
+        self._spritesheet  = Image.open(sheet_path).convert("RGBA")
 
-    def _get_sprite(self, obj_name: str, gs: str, w_px: int, h_px: int):
-        """Return a scaled RGBA PIL Image for obj_name in gamestyle gs, or None."""
-        if not self._sprite_map or not self._sheet:
-            return None
-        game_id = NAME_TO_GAME_ID.get(obj_name)
-        if game_id is None:
-            return None
-        key = (obj_name, gs, w_px, h_px)
-        if key in self._spr_cache:
-            return self._spr_cache[key]
-        # Try base variant then A variant
-        coords = None
-        for enum_name in (f"OBJ_{game_id}", f"OBJ_{game_id}A"):
-            coords = self._sprite_map.get((enum_name, gs))
-            if coords:
+    def _get_tile_sheet(self, basename: str):
+        """Return a cached RGBA PIL Image for img/tile/<basename>, or None."""
+        if basename in self._tile_sheet_cache:
+            return self._tile_sheet_cache[basename]
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        sheet = None
+        for d in (os.path.join(script_dir, "img", "tile"),
+                  os.path.join(script_dir, "toost_stuff", "img", "tile")):
+            p = os.path.join(d, basename)
+            if os.path.exists(p):
+                sheet = Image.open(p).convert("RGBA")
                 break
-        if not coords:
-            self._spr_cache[key] = None
+        self._tile_sheet_cache[basename] = sheet
+        return sheet
+
+    def _render_toost_image(self, lvl):
+        """Replay drawing_instructions to reproduce toost's own PNG render.
+
+        Each instruction is either a tile-sheet blit (is_tile=true: crop
+        tile_x/tile_y/tile_w/tile_h * TileW from img/tile/<sheet>.png) or a
+        spritesheet blit (is_tile=false: path is the combined OBJ|Gamestyle
+        id, looked up in self._id_to_sprite -> img/spritesheet.png). Both are
+        scaled to target_width/target_height and pasted at x,y — the exact
+        draw script toost used, so this should match the reference PNG
+        pixel-for-pixel (at native 16px/tile resolution).
+        """
+        dis = lvl.get("drawing_instructions")
+        if not dis or not _PIL_OK:
             return None
-        sx, sy, sw, sh = coords
-        crop = self._sheet.crop((sx, sy, sx + sw, sy + sh))
-        scaled = crop.resize((w_px, h_px), Image.NEAREST)
-        self._spr_cache[key] = scaled
-        return scaled
 
-    def _render_sprite_image(self, lvl) -> "Image.Image":
-        """Compose the full level into a PIL RGBA image using sprite data."""
-        ts       = self.tile_size
         max_tx, max_ty = self._grid_bounds(lvl)
-        W, H     = max_tx * ts, max_ty * ts
-        gs       = self._resolve_gs(lvl.get("gamestyle", ""))
-        active   = self._active_cats()
-        objects  = lvl.get("objects", [])
+        W, H = max_tx * 16, max_ty * 16
+        if W <= 0 or H <= 0:
+            return None
 
-        img  = Image.new("RGBA", (W, H), (92, 148, 252, 255))   # sky blue
-        draw = ImageDraw.Draw(img)
+        # toost's cairo surface starts fully transparent; the sky-blue look
+        # comes from the canvas background (#5C94FC) showing through.
+        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 
-        BG_TYPES = {"Semisolid Platform", "Mushroom Platform"}
+        for instr in dis:
+            tw = instr.get("target_width", 0)
+            th = instr.get("target_height", 0)
+            if tw <= 0 or th <= 0:
+                continue
+            x = instr.get("x", 0)
+            y = instr.get("y", 0)
 
-        for pass_n in range(2):
-            for obj in objects:
-                name   = obj.get("name", "_unknown")
-                is_bg  = name in BG_TYPES
-                if pass_n == 0 and not is_bg: continue
-                if pass_n == 1 and is_bg:     continue
-
-                _, color, cat = get_meta(name)
-                if cat not in active:
+            if instr.get("is_tile"):
+                sheet = self._get_tile_sheet(os.path.basename(instr.get("path", "")))
+                if sheet is None:
                     continue
-
-                col, row = obj_anchor(obj)
-                w,   h   = obj_tile_size(obj)
-
-                # Slopes: draw one sprite tile per slope cell
-                if name in _SLOPE_NAMES:
-                    for tc, tr in slope_tiles(obj):
-                        if tc < 0 or tc >= max_tx or tr < 0 or tr >= max_ty:
-                            continue
-                        px0 = tc * ts
-                        py0 = (max_ty - tr - 1) * ts
-                        spr = self._get_sprite(name, gs, ts, ts)
-                        if spr:
-                            img.paste(spr, (px0, py0), spr)
-                        else:
-                            r_, g_, b_ = int(color[1:3],16), int(color[3:5],16), int(color[5:7],16)
-                            draw.rectangle([px0, py0, px0+ts-1, py0+ts-1], fill=(r_, g_, b_))
+                tile_px = sheet.width // 16
+                sx = instr.get("tile_x", 0) * tile_px
+                sy = instr.get("tile_y", 0) * tile_px
+                sw = max(1, instr.get("tile_w", 1)) * tile_px
+                sh = max(1, instr.get("tile_h", 1)) * tile_px
+                crop = sheet.crop((sx, sy, sx + sw, sy + sh))
+            else:
+                if self._spritesheet is None:
                     continue
-
-                # Compute pixel rect (y-flipped)
-                px0 = col * ts
-                py0 = (max_ty - row - h) * ts
-                px1 = px0 + w * ts
-                py1 = py0 + h * ts
-
-                # Skip fully off-canvas objects
-                if px1 <= 0 or py1 <= 0 or px0 >= W or py0 >= H:
+                try:
+                    sprite_id = int(instr.get("path", ""))
+                except ValueError:
                     continue
+                coords = self._id_to_sprite.get(sprite_id)
+                if coords is None:
+                    continue
+                sx, sy, sw, sh = coords
+                crop = self._spritesheet.crop((sx, sy, sx + sw, sy + sh))
 
-                # Clamp to canvas
-                cx0, cy0 = max(0, px0), max(0, py0)
-                cx1, cy1 = min(W, px1), min(H, py1)
-                w_px, h_px = cx1 - cx0, cy1 - cy0
+            if crop.size != (tw, th):
+                crop = crop.resize((tw, th), Image.NEAREST)
 
-                spr = self._get_sprite(name, gs, w_px, h_px)
-                if spr:
-                    img.paste(spr, (cx0, cy0), spr)
-                else:
-                    r_, g_, b_ = int(color[1:3],16), int(color[3:5],16), int(color[5:7],16)
-                    draw.rectangle([cx0, cy0, cx1-1, cy1-1], fill=(r_, g_, b_, 220))
+            opacity = instr.get("opacity", 1.0)
+            if opacity < 1.0:
+                crop = crop.copy()
+                alpha = crop.getchannel("A").point(lambda a, o=opacity: int(a * o))
+                crop.putalpha(alpha)
+
+            angle = instr.get("angle", 0.0)
+            if angle:
+                crop = crop.rotate(-math.degrees(angle), resample=Image.NEAREST, expand=True)
+                x -= (crop.width - tw) // 2
+                y -= (crop.height - th) // 2
+
+            # Proper "over" compositing (PIL's paste-with-mask mishandles the
+            # alpha channel itself, which matters once the canvas starts
+            # transparent and instructions carry partial opacity).
+            region = img.crop((x, y, x + crop.width, y + crop.height))
+            img.paste(Image.alpha_composite(region, crop), (x, y))
 
         return img
+
+    def _get_toost_image(self, idx, lvl):
+        """Native-resolution (16px/tile) toost render, cached per level."""
+        if idx not in self._toost_cache:
+            self._toost_cache[idx] = self._render_toost_image(lvl)
+        return self._toost_cache[idx]
+
+    def _get_pixel_occupancy(self, idx, lvl, max_tx, max_ty):
+        """Per-tile bool grid (row 0 = bottom) — True where toost's render
+        has any non-transparent pixel. This is the ground truth for "is
+        anything actually here", independent of obj_anchor/obj_tile_size."""
+        if idx not in self._occ_cache:
+            img = self._get_toost_image(idx, lvl)
+            if img is None:
+                occ = None
+            else:
+                alpha = img.getchannel("A")
+                occ = [[False] * max_tx for _ in range(max_ty)]
+                for row in range(max_ty):
+                    py = (max_ty - 1 - row) * 16
+                    for col in range(max_tx):
+                        px = col * 16
+                        cell = alpha.crop((px, py, px + 16, py + 16))
+                        if cell.getbbox() is not None:
+                            occ[row][col] = True
+            self._occ_cache[idx] = occ
+        return self._occ_cache[idx]
+
+    def _draw_object_overlay(self, lvl, max_tx, max_ty, ts):
+        """Outline each object's (col,row,w,h) bounding box (from obj_anchor /
+        obj_tile_size) on top of the Toost render, for fact-checking those
+        heuristics against toost's own ground-truth tile placement."""
+        active = self._active_cats()
+        show_lbl = self.show_labels.get() and ts >= 14
+        font_sz = ("Courier", max(ts // 2, 7), "bold")
+        for obj in lvl.get("objects", []):
+            name = obj.get("name", "_unknown")
+            char, color, cat = get_meta(name)
+            if cat not in active:
+                continue
+            col, row = obj_anchor(obj)
+            w, h = obj_tile_size(obj)
+            if col + w <= 0 or row + h <= 0 or col >= max_tx or row >= max_ty:
+                continue
+            px0 = col * ts
+            px1 = (col + w) * ts
+            py0 = (max_ty - (row + h)) * ts
+            py1 = (max_ty - row) * ts
+            self.canvas.create_rectangle(px0, py0, px1, py1, outline=color, width=2)
+            if show_lbl:
+                self.canvas.create_text((px0 + px1) // 2, (py0 + py1) // 2,
+                                        text=char, fill=color, font=font_sz)
 
     def _grid_bounds(self, lvl):
         """Return (max_tx, max_ty) matching the C++ H = BorT/16, W = BorR/16."""
@@ -854,23 +914,28 @@ class MM2Viewer(tk.Tk):
         H = max_ty * ts
         self.canvas.config(scrollregion=(0, 0, W, H))
 
-        # ---- Sprite mode ----
-        if self.sprite_mode.get() and _PIL_OK and self._sprite_map:
-            pil_img = self._render_sprite_image(lvl)
-            photo   = ImageTk.PhotoImage(pil_img)
-            self.canvas.create_image(0, 0, image=photo, anchor="nw")
-            self._photo_ref = photo          # prevent garbage collection
-            if self.show_grid.get():
-                gc = "#555555" if ts > 10 else "#333333"
-                for col in range(max_tx + 1):
-                    self.canvas.create_line(col*ts, 0, col*ts, H, fill=gc)
-                for row in range(max_ty + 1):
-                    self.canvas.create_line(0, row*ts, W, row*ts, fill=gc)
-            self.info_lbl.config(
-                text=f"[{self.current_idx+1}/{len(self.levels)}]  {name}  "
-                     f"[Sprites | style={lvl.get('gamestyle','?')}]  "
-                     f"grid {max_tx}×{max_ty}")
-            return
+        # ---- Toost Render mode (replays drawing_instructions) ----
+        if self.toost_mode.get() and _PIL_OK:
+            native = self._get_toost_image(self.current_idx, lvl)
+            if native is not None:
+                disp = native if ts == 16 else native.resize((W, H), Image.NEAREST)
+                photo = ImageTk.PhotoImage(disp)
+                self.canvas.create_image(0, 0, image=photo, anchor="nw")
+                self._photo_ref = photo          # prevent garbage collection
+                if self.show_grid.get():
+                    gc = "#555555" if ts > 10 else "#333333"
+                    for col in range(max_tx + 1):
+                        self.canvas.create_line(col*ts, 0, col*ts, H, fill=gc)
+                    for row in range(max_ty + 1):
+                        self.canvas.create_line(0, row*ts, W, row*ts, fill=gc)
+                if self.show_objects.get():
+                    self._draw_object_overlay(lvl, max_tx, max_ty, ts)
+                self.info_lbl.config(
+                    text=f"[{self.current_idx+1}/{len(self.levels)}]  {name}  "
+                         f"[Toost Render | style={lvl.get('gamestyle','?')}]  "
+                         f"grid {max_tx}×{max_ty}")
+                return
+            # No drawing_instructions in this JSON — fall back to rectangle view below.
 
         self.canvas.create_rectangle(0, 0, W, H, fill="#5C94FC", outline="")
 
@@ -986,10 +1051,13 @@ class MM2Viewer(tk.Tk):
                                 self.canvas.create_text((px0 + px1) // 2, (py0 + py1) // 2,
                                                         text=char, fill="white", font=font_sz)
 
+        note = ""
+        if self.toost_mode.get():
+            note = "  |  [Toost Render unavailable: no drawing_instructions]"
         self.info_lbl.config(
             text=f"[{self.current_idx + 1}/{len(self.levels)}]  {name}  |  "
                  f"style={lvl.get('gamestyle', '?')}  theme={lvl.get('theme', '?')}  |  "
-                 f"{len(objects)} objects  |  grid {max_tx}×{max_ty}")
+                 f"{len(objects)} objects  |  grid {max_tx}×{max_ty}{note}")
 
     # ----------------------------------------------------------- ASCII mode --
     def _build_ascii_grid(self):
@@ -999,48 +1067,81 @@ class MM2Viewer(tk.Tk):
 
         grid = [[" "] * max_tx for _ in range(max_ty)]
 
-        def set_cell(col, row_game, ch):
+        # Ground truth from toost's own render (None if drawing_instructions
+        # is unavailable, in which case we fall back to pure heuristics).
+        occ = self._get_pixel_occupancy(self.current_idx, lvl, max_tx, max_ty) \
+            if _PIL_OK else None
+
+        def set_cell(col, row_game, ch, only_if_blank=False):
             if 0 <= col < max_tx and 0 <= row_game < max_ty:
-                grid[max_ty - 1 - row_game][col] = ch
+                if occ is not None and not occ[row_game][col]:
+                    return  # toost shows nothing here — skip the heuristic ghost
+                r = max_ty - 1 - row_game
+                if only_if_blank and grid[r][col] != " ":
+                    return  # a real object already claims this cell
+                grid[r][col] = ch
 
         BG_TYPES = {"Semisolid Platform", "Mushroom Platform"}
-        for pass_n in range(2):
+        # Slopes and track rails sit "between" background platforms and real
+        # objects: their rectangular bbox commonly overlaps a Block, enemy,
+        # etc. that shares one of its tiles (perfectly normal in Mario
+        # Maker), and that object should stay visible. Draw order decides
+        # the winner for a shared cell, so background platforms go first,
+        # slopes/tracks next, and everything else last.
+        FILL_TYPES = _SLOPE_NAMES | {"Track"}
+
+        def _pass_for(obj_name):
+            if obj_name in BG_TYPES:
+                return 0
+            if obj_name in FILL_TYPES:
+                return 1
+            return 2
+
+        for pass_n in range(3):
             for obj in objects:
                 obj_name = obj.get("name", "_unknown")
-                is_bg = obj_name in BG_TYPES
-                if pass_n == 0 and not is_bg: continue
-                if pass_n == 1 and is_bg:     continue
+                if _pass_for(obj_name) != pass_n:
+                    continue
                 char, _, _ = get_meta(obj_name)
                 if obj_name == "Pipe":
                     char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag", 0)), char)
+                elif obj_name in _SLOPE_NAMES:
+                    right_slope = (obj.get("flag", 0) & 0x100000) != 0
+                    char = "/" if right_slope else "\\"
                 col, row = obj_anchor(obj)
                 w, h = obj_tile_size(obj)
-                if obj_name in _SLOPE_NAMES:
-                    right_slope = (obj.get("flag", 0) & 0x100000) != 0
-                    slope_char = "/" if right_slope else "\\"
-                    face_cells = list(slope_tiles(obj))
-                    for tc, tr in face_cells:
-                        if right_slope:
-                            for fill_x in range(tc + 1, col + w):
-                                set_cell(fill_x, tr, GROUND_CHAR)
-                        else:
-                            for fill_x in range(col, tc):
-                                set_cell(fill_x, tr, GROUND_CHAR)
-                    for tc, tr in face_cells:
-                        set_cell(tc, tr, slope_char)
+                # Claim the object's full bounding box; occ (toost's actual
+                # rendered pixels) carves out the real silhouette — slope
+                # diagonals, mushroom-platform caps/stems, etc. fall out for
+                # free instead of needing per-shape fill formulas.
+                for dx in range(w):
+                    for dy in range(h):
+                        set_cell(col + dx, row + dy, char)
 
-                elif obj_name == "Mushroom Platform":
-                    sc = col + w // 2
-                    # stem: centered column, all rows below cap
-                    for dy in range(h - 1):
-                        set_cell(sc, row + dy, char)
-                    # cap: full width at top row
-                    for dx in range(w):
-                        set_cell(col + dx, row + h - 1, char)
-                else:
-                    for dx in range(w):
-                        for dy in range(h):
-                            set_cell(col + dx, row + dy, char)
+                if obj_name == "Burner":
+                    # The flame jet isn't part of the burner's own bbox, so
+                    # it's claimed separately based on facing direction.
+                    direction = _BURNER_FLAME_DIR.get(obj.get("flag", 0) % 0x100)
+                    if direction == 'U':
+                        flame = [(col + dx, row + h + dy) for dx in range(w) for dy in range(3 * h)]
+                    elif direction == 'D':
+                        flame = [(col + dx, row - 1 - dy) for dx in range(w) for dy in range(3 * h)]
+                    elif direction == 'R':
+                        flame = [(col + w + dx, row + dy) for dx in range(3 * w) for dy in range(h)]
+                    elif direction == 'L':
+                        flame = [(col - 1 - dx, row + dy) for dx in range(3 * w) for dy in range(h)]
+                    else:
+                        flame = []
+                    for fx, fy in flame:
+                        set_cell(fx, fy, char, only_if_blank=True)
+
+        # Anything toost actually drew that no object claimed — keeps the
+        # silhouette pixel-faithful even where the heuristics fall short.
+        if occ is not None:
+            for row_game in range(max_ty):
+                for col in range(max_tx):
+                    if occ[row_game][col] and grid[max_ty - 1 - row_game][col] == " ":
+                        grid[max_ty - 1 - row_game][col] = UNKNOWN_CHAR
         return grid, max_tx, max_ty
 
     def _render_ascii(self):
@@ -1055,10 +1156,11 @@ class MM2Viewer(tk.Tk):
         for row_canvas, row_chars in enumerate(grid):
             for col, ch in enumerate(row_chars):
                 x0, y0 = col * ts, row_canvas * ts
-                if ch == GROUND_CHAR:    bg = "#8B6914"
-                elif ch in ("/", "\\"): bg = "#AA8833"
-                elif ch == " ":          bg = "#111111"
-                else:                    bg = "#222222"
+                if ch == GROUND_CHAR:     bg = "#8B6914"
+                elif ch in ("/", "\\"):  bg = "#AA8833"
+                elif ch == UNKNOWN_CHAR: bg = "#553355"
+                elif ch == " ":           bg = "#111111"
+                else:                     bg = "#222222"
                 self.canvas.create_rectangle(x0, y0, x0 + ts, y0 + ts,
                                              fill=bg, outline="")
                 if ch != " ":
@@ -1087,7 +1189,7 @@ class MM2Viewer(tk.Tk):
             return
         lvl = self.levels[self.current_idx]
         ts  = self.tile_size
-        _, max_ty = self._grid_bounds(lvl)
+        max_tx, max_ty = self._grid_bounds(lvl)
 
         # account for canvas scroll offset
         cx = self.canvas.canvasx(event.x)
@@ -1102,7 +1204,22 @@ class MM2Viewer(tk.Tk):
             if oc <= col < oc + ow and or_ <= row_game < or_ + oh:
                 hits.append(f"{obj.get('name', '?')}  size={ow}×{oh}  @({oc},{or_})")
 
-        tip = "\n".join(hits) if hits else f"tile ({col}, {row_game})"
+        # Cross-check against toost's own render (ground truth for "is
+        # anything actually drawn here") so the tooltip flags heuristic
+        # mismatches instead of silently trusting obj_anchor/obj_tile_size.
+        occ = self._get_pixel_occupancy(self.current_idx, lvl, max_tx, max_ty) \
+            if _PIL_OK else None
+        in_bounds = 0 <= col < max_tx and 0 <= row_game < max_ty
+        occupied = occ is not None and in_bounds and occ[row_game][col]
+
+        if hits:
+            tip = "\n".join(hits)
+            if occ is not None and not occupied:
+                tip += "\n[no toost pixels here]"
+        elif occupied:
+            tip = f"tile ({col}, {row_game})  [occupied, unidentified]"
+        else:
+            tip = f"tile ({col}, {row_game})"
         self._show_tip(event.x_root, event.y_root, tip)
 
     def _show_tip(self, rx, ry, text):
