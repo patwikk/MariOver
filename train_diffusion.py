@@ -1050,6 +1050,10 @@ def process_diffusion_batch(
     """
     Handles a single batch for training or validation.
     """ 
+
+    if batch is None:
+        return None
+
     if args.negative_prompt_training:
         scenes, captions, negative_captions = batch
     else:

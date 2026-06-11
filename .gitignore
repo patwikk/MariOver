@@ -16,3 +16,4 @@ run.sh
 /EXTENDED_TEST_*
 /EXTENDED_TEST
 /MM-*
+decode_swe.py
