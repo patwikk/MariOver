@@ -109,13 +109,28 @@ def pack_str_utf16(s, size_bytes):
 def pack_level_header(j):
     goal_x = j.get("goal_x", 0)
     goal_y = j.get("goal_y", 0)
-    # toost exports goal_x/goal_y as the raw s2/u1 binary values (small
-    # tile-row/column numbers). Some other exporters instead report them
-    # in object-coordinate units (160 per tile), which overflows goal_y's
-    # u1 field. Detect that case and rescale back to raw tile units.
+    right_boundary = j.get("right_boundary", 0)
+    # toost exports goal_x/goal_y as the raw s2/u1 binary values (goal_y in
+    # whole tiles, goal_x in TENTHS of a tile). Some other exporters instead
+    # report both in object-coordinate units (160 per tile), which overflows
+    # goal_y's u1 field. Detect that case and rescale both back to raw units.
     if goal_y > 255:
         goal_x //= 160
         goal_y //= 160
+    elif (
+        right_boundary
+        and goal_x // 10 > right_boundary // 16
+        and goal_x // 160 <= right_boundary // 16
+    ):
+        # Some exporters leave goal_y in raw tile units but still report
+        # goal_x in object-coordinate units (160 per tile, like
+        # objects[].x) instead of tenths of a tile. If treating goal_x as
+        # tenths-of-a-tile would place the goal past the level's right
+        # boundary, but treating it as object-coordinate units would not,
+        # rescale 160-per-tile -> 10-per-tile. (Otherwise this build's
+        # toost reads a wildly out-of-range goal column and crashes, with
+        # or without --toost-compat.)
+        goal_x = (goal_x // 160) * 10
 
     fixed = struct.pack(
         "<BBhhhhbbbbBBiiiiiIqi",
@@ -257,8 +272,45 @@ def _pack_array(items, max_count, size, pack_fn, label):
     return bytes(out)
 
 
-def pack_map(j):
-    objects          = j.get("objects", [])
+def _fix_object_anchors(objects, label="map"):
+    """Real .bcd objects store x/y as the CENTER of their tile footprint:
+        x = (left_col + w/2) * 160   (x % 160 == 80 for odd w, == 0 for even w)
+        y = bottom_row * 160 + 80    (always, regardless of h)
+    (Verified against bcd_levels/json/*_overworld.json: 1x1/2x2/4x4/8x1
+    objects all follow this.)
+
+    Some JSON exporters/generators instead place objects on a naive
+    "x = col*160, y = row*160" grid with no center offset. toost still
+    reads x/y -> tile via x//160 (-w//2) / y//160, so the object lands in
+    the "right" tile, but is drawn 8px (half a tile) off the ground grid -
+    visually "floating between tiles" instead of sitting on them.
+
+    Detect the naive X convention from odd-width objects (where naive vs.
+    real differ mod 160) and correct both axes.
+    """
+    odd_w = [o for o in objects if o.get("w", 1) % 2 == 1]
+    x_naive = bool(odd_w) and sum(1 for o in odd_w if o.get("x", 0) % 160 == 0) > len(odd_w) // 2
+
+    fixed = []
+    n_x = n_y = 0
+    for o in objects:
+        o = dict(o)
+        if x_naive:
+            o["x"] = o.get("x", 0) + o.get("w", 1) * 80
+            n_x += 1
+        if o.get("y", 0) % 160 == 0:
+            o["y"] = o.get("y", 0) + 80
+            n_y += 1
+        fixed.append(o)
+
+    if n_x or n_y:
+        print(f"  [{label}] toost-anchor fix: shifted {n_x} object(s) on X, "
+              f"{n_y} object(s) on Y onto toost's tile-center grid")
+    return fixed
+
+
+def pack_map(j, label="map"):
+    objects          = _fix_object_anchors(j.get("objects", []), label)
     ground           = j.get("ground", [])
     snakes           = j.get("snakes", [])
     clear_pipes      = j.get("clear_pipes", [])
@@ -322,8 +374,8 @@ def build_payload(overworld_json, subworld_json):
     header_source = overworld_json or subworld_json or {}
     payload = (
         pack_level_header(header_source)
-        + pack_map(overworld_json or {})
-        + pack_map(subworld_json or {})
+        + pack_map(overworld_json or {}, label="overworld")
+        + pack_map(subworld_json or {}, label="subworld")
     )
     assert len(payload) == PAYLOAD_SIZE, len(payload)
     return payload
