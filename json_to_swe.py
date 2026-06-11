@@ -148,7 +148,7 @@ OBJ_ID_MAP = {
     6:   "obj_rock_res",            # Hard Block (verified: MM2 "Stone" id=6)
     7:   "obj_rock_res",            # Ground-as-object (approx; terrain is S2)
     8:   "obj_coin_res",            # Coin
-    9:   None,                      # Pipe -> emitted to S5, not S4 (see build_pipes)
+    9:   None,                      # Pipe -> emitted to S5 (see build_pipes)
     10:  "obj_spring_res",          # Spring / Trampoline
     11:  "obj_platform_res",        # Lift (approx)
     12:  "obj_thwomp_res",          # Thwomp
@@ -274,22 +274,25 @@ OBJ_ID_MAP = {
     132: "obj_spring_res",          # ON/OFF Trampoline (approx)
 }
 
-# Pipes are NOT S4 objects — they live in the S5 section with their own schema
-# (verified from an editor-saved .swe). A pipe is defined by two endpoints,
-# (xx,yy) -> (t_x_pos,t_y_pos), spanning its length, plus a direction `dir`.
-# This template holds the constant/default fields; per-pipe code fills the
-# positions and dir.
+# MM2 pipe direction (flag % 0x80) -> orientation, used by build_pipes to pick
+# which axis (xscl vs yscl) carries the pipe's length and to orient its
+# footprint anchor.
+MM2_PIPE_DIR = {0x00: "R", 0x20: "L", 0x40: "U", 0x60: "D"}
+
+# SWE S5 pipe `dir` (0/1/2/3 = U/R/D/L, clockwise) and matching `rot`,
+# verified against four hand-placed length-4 pipes (see build_pipes).
+PIPE_DIR_MAP = {"U": 0, "R": 1, "D": 2, "L": 3}
+PIPE_ROT = {0: 0, 1: -90, 2: 180, 3: -270}
+
+# Constant/default fields for an S5 pipe entry, taken verbatim from a
+# hand-placed "vertical, length 4" pipe saved by the SMMWE editor (see
+# build_pipes). Per-pipe code overrides sz/sclx/rot/xscl/yscl/dir/xx/yy/
+# t_x_pos/t_y_pos.
 S5_PIPE_TEMPLATE = {
     "sz": 0, "t_dir": 0, "clr": 0, "sclx": 1, "t_rot": 0, "wrp": 0,
     "t_s_sclx": 1, "msk": 0, "xscl": 1, "t_yscl": 1, "rot": 0, "t_sz": 0,
-    "t_clr": 0, "yscl": 1, "t_xscl": 1,
+    "t_clr": 0, "yscl": 1, "t_xscl": 1, "dir": 0,
 }
-
-# MM2 pipe direction (flag % 0x80) -> SWE pipe `dir`. The sample editor pipe
-# was horizontal with dir=0; the other three are a best guess (R=0,L=1,U=2,D=3)
-# and easy to retune if a direction comes out wrong in-game.
-MM2_PIPE_DIR = {0x00: "R", 0x20: "L", 0x40: "U", 0x60: "D"}
-PIPE_DIR_MAP = {"R": 0, "L": 1, "U": 2, "D": 3}
 
 # Some object types render one tile lower than the generic formula predicts
 # (their SMMWE anchor differs from the generic top-left-cell convention).
@@ -363,19 +366,28 @@ def build_ground(ground):
 def build_pipes(objects):
     """MM2 pipes (id 9) -> SWE S5 entries.
 
-    Pipes are "left-anchor" objects per mm2_viewer_json.py's obj_anchor /
-    obj_tile_size: col = x // 160 with NO `-w//2` correction (our generic
-    object_cell() applies that correction and was wrong for pipes -- likely
-    the cause of the truncated/misplaced pipes seen so far), and the pipe's
-    *length* always comes from `h` regardless of direction (the cross-
-    section on the other axis is fixed at 2 tiles).
+    Reverse-engineered from four hand-placed length-4 pipes (one per
+    direction) saved directly from the SMMWE editor -- both earlier S5
+    endpoint-based schemes and an S4 "obj_tuberia_res" attempt were wrong.
+    The four samples (sz, xscl/yscl, sclx, rot, dir, t_x_pos-xx, t_y_pos-yy):
 
-    Each direction's MM2 anchor point (base_col, base_row) is the pipe's
-    *closed* end; the open end is `length` tiles further along the pipe's
-    axis. We emit (xx,yy) = open end and (t_x_pos,t_y_pos) = closed/anchor
-    end, matching the one verified sample (a set of "U" pipes of varying
-    length in p2.swe, all sharing a common t_y with yy < t_y). R/L/D are
-    best-effort extrapolations of that pattern and untested in-game."""
+        U: sz=2 yscl=2 xscl=1 sclx=1  rot=0    dir=0  t_x-xx=32 t_y-yy=32
+        R: sz=2 yscl=1 xscl=2 sclx=1  rot=-90  dir=1  t_x-xx=32 t_y-yy=0
+        D: sz=2 yscl=2 xscl=1 sclx=-1 rot=180  dir=2  t_x-xx=32 t_y-yy=0
+        L: sz=2 yscl=1 xscl=2 sclx=-1 rot=-270 dir=3  t_x-xx=32 t_y-yy=0
+
+    All four were length 4 (sz = length - 2 = 2). The pattern: `dir` is
+    0/1/2/3 for U/R/D/L (clockwise), rot = -90*dir (dir=2 shown as +180),
+    sclx flips to -1 for the "second half" (D/L), the length axis is yscl
+    for vertical (U/D) and xscl for horizontal (R/L), t_x_pos is always
+    xx+32, and t_y_pos is yy+32 only for U (else yy).
+
+    (xx,yy) is the TOP-LEFT corner of the pipe's MM2 tile footprint, per
+    obj_anchor()/obj_tile_size() in mm2_viewer_json.py (no `-w//2`
+    correction; `length` always comes from `h` regardless of direction).
+    This anchor convention is verified for U; R/D/L anchors are an
+    untested extrapolation since the 4 samples were isolated pipes with no
+    surrounding terrain to check position against."""
     out = []
     for o in objects:
         if o.get("id") != 9:
@@ -386,31 +398,31 @@ def build_pipes(objects):
         direction = MM2_PIPE_DIR.get(o.get("flag", 0) % 0x80, "R")
 
         if direction == "U":
-            x = base_col * PX
-            y_min = ground_yy(base_row + length - 1)   # top (open end)
-            xx, yy = x, y_min
-            t_x, t_y = x, y_min + length * PX          # bottom (anchor)
+            col, row_top = base_col, base_row + length - 1
         elif direction == "D":
-            x = (base_col - 1) * PX
-            y_min = ground_yy(base_row)                # top (anchor)
-            xx, yy = x, y_min + length * PX            # bottom (open end)
-            t_x, t_y = x, y_min
+            col, row_top = base_col - 1, base_row
         elif direction == "R":
-            y = ground_yy(base_row)
-            x_left = base_col * PX                     # left (anchor)
-            xx, yy = x_left + length * PX, y           # right (open end)
-            t_x, t_y = x_left, y
+            col, row_top = base_col, base_row
         else:  # L
-            y = ground_yy(base_row + 1)
-            x_left = (base_col - length + 1) * PX      # left (open end)
-            xx, yy = x_left, y
-            t_x, t_y = x_left + length * PX, y         # right (anchor)
+            col, row_top = base_col - length + 1, base_row + 1
+
+        xx = col * PX
+        yy = ground_yy(row_top)
+        dir_idx = PIPE_DIR_MAP[direction]
 
         entry = dict(S5_PIPE_TEMPLATE)
+        if dir_idx % 2 == 0:   # U, D
+            entry["yscl"] = length / 2
+        else:                  # R, L
+            entry["xscl"] = length / 2
         entry.update({
+            "sz": length - 2,
+            "sclx": -1 if dir_idx >= 2 else 1,
+            "rot": PIPE_ROT[dir_idx],
+            "dir": dir_idx,
             "xx": xx, "yy": yy,
-            "t_x_pos": t_x, "t_y_pos": t_y,
-            "dir": PIPE_DIR_MAP[direction],
+            "t_x_pos": xx + 2 * PX,
+            "t_y_pos": yy + 2 * PX if direction == "U" else yy,
         })
         out.append(entry)
     return out
@@ -505,8 +517,8 @@ def build_metadata(j, *, user, name, desc, date_str, time_str):
 def build_world(j, *, user, name, desc, date_str, time_str):
     """Build a full SWE world dict (S0 or a populated SB1) from one map JSON."""
     objects = j.get("objects", [])
-    s5 = build_pipes(objects)
     s4, dropped = build_objects(objects)
+    s5 = build_pipes(objects)
 
     world = {
         "S1": [build_metadata(j, user=user, name=name, desc=desc,
