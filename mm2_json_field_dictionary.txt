@@ -1,0 +1,226 @@
+MM2 JSON FIELD/NUMBER DICTIONARY
+=================================
+Companion to mm2_tileset_dictionary.txt. That file explains the ASCII
+chars used in exported text grids; this file explains the *numeric*
+fields found in MM2 level JSON (toost exports, level.py/level.ksy
+decodes, bcd_levels/json/*.json, etc.).
+
+Sources: level.py / level.ksy (Kaitai struct definitions) and
+mm2_viewer_json.py (OBJ_META char table).
+
+-----------------------------------------------------------------------
+1) objects[].id  — object/entity type (0-132)
+-----------------------------------------------------------------------
+Matches Level.Obj.ObjId. The "ASCII" column is the matching char from
+mm2_tileset_dictionary.txt, where one exists.
+
+  ID  Object                          ASCII
+  --  ------------------------------  -----
+   0  Goomba                            g
+   1  Koopa Troopa                      K
+   2  Piranha Plant                     P
+   3  Hammer Bro                        m
+   4  Block (Brick)                     B
+   5  Question Block                    ?
+   6  Hard Block                        H
+   7  Ground                            #
+   8  Coin                              ¢
+   9  Pipe                              | (↑↓←→ by direction)
+  10  Spring                            ±
+  11  Lift                              -
+  12  Thwomp                            t
+  13  Bullet Bill Blaster               V
+  14  Mushroom Platform                 ³
+  15  Bob-omb                           o
+  16  Semisolid Platform                ´
+  17  Bridge                            ·
+  18  P Switch                          ¦
+  19  POW Block                         ¯
+  20  Super Mushroom                    M
+  21  Donut Block (falling)             d
+  22  Cloud                             Ì
+  23  Note Block                        N
+  24  Fire Bar                          Ä
+  25  Spiny                             s
+  26  Goal Ground (terrain near goal)   # (no dedicated char)
+  27  Goal (flagpole / goal card)       G
+  28  Buzzy Beetle                      b
+  29  Hidden Block                      h
+  30  Lakitu                            L
+  31  Lakitu's Cloud                    l
+  32  Banzai Bill                       Z
+  33  1-Up Mushroom                     U
+  34  Fire Flower                       i
+  35  Super Star                        ¤
+  36  Lava Lift                         ¸
+  37  Starting Brick                    {
+  38  Starting Arrow                    ×
+  39  Magikoopa                         y
+  40  Spike Top                         <
+  41  Boo                               u
+  42  Clown Car                         Ô
+  43  Spike Trap                        Ç
+  44  Big (Mega) Mushroom                ¶
+  45  Goomba's Shoe                     µ
+  46  Dry Bones                         9
+  47  Cannon                            Ø
+  48  Blooper                           q
+  49  Castle Bridge                     =
+  50  Jumping Machine                   J
+  51  Skipsqueak                        j
+  52  Wiggler                           w
+  53  Fast Conveyor Belt                ¼
+  54  Burner                            Æ
+  55  Door                              D
+  56  Cheep Cheep                       ~
+  57  Muncher                           ,
+  58  Rocky Wrench                      r
+  59  Track (rail)                      Ö
+  60  Lava Bubble                       &
+  61  Chain Chomp                       @
+  62  Bowser                            X
+  63  Ice Block                         I
+  64  Vine                              Í
+  65  Stingby                           ;
+  66  Arrow (decoration)                Ï
+  67  One-Way Wall/Platform             Ð
+  68  Saw                               Å
+  69  Player (spawn point)              Ó
+  70  Big Coin (10-Coin)                £
+  71  Half-Collision Platform           Â
+  72  Koopa Car / Koopa Clown Car       Õ
+  73  Cinobio                           +
+  74  Spike Ball (Wrecking Ball)        È
+  75  Stone Block                       S
+  76  Twister                           Ê
+  77  Boom Boom                         !
+  78  Pokey                             Y
+  79  P Block                           p
+  80  Sprint Platform                   ½
+  81  SMB2 Mushroom                     §
+  82  Donut Block Platform              Ã
+  83  Skewer                            É
+  84  Snake Block                       ¹
+  85  Track Block                       º
+  86  Charvaargh                        v
+  87  Slight Slope                      /
+  88  Steep Slope                       \
+  89  Reel Camera (cutscene marker)     Ñ
+  90  Checkpoint Flag                   f
+  91  Seesaw                            ¾
+  92  Red Coin                          $
+  93  Clear Pipe                        c
+  94  Conveyor Belt                     »
+  95  Key                               k
+  96  Ant Trooper                       a
+  97  Warp Box                          W
+  98  Bowser Jr.                        x
+  99  ON/OFF Block                      O
+ 100  Dotted-Line Block                 .
+ 101  Water Marker                      Î
+ 102  Monty Mole                        n
+ 103  Fish Bone                         %
+ 104  Angry Sun                         A
+ 105  Swinging Claw                     ¿
+ 106  Tree                              T
+ 107  Piranha Creeper                   e
+ 108  Blinking Block                    *
+ 109  Sound Effect marker               Ò
+ 110  Spike Block                       ^
+ 111  Mechakoopa                        R
+ 112  Crate                             C
+ 113  Mushroom Trampoline               Á
+ 114  Porcupuffer                       F
+ 115  Cinobic                           ¡
+ 116  Super Hammer                      ¬
+ 117  Bully                             [
+ 118  Icicle                            Ë
+ 119  ! Block (exclamation block)       Ù
+ 120  Lemmy Koopa                       1
+ 121  Morton Koopa Jr.                  2
+ 122  Larry Koopa                       3
+ 123  Wendy O. Koopa                    4
+ 124  Iggy Koopa                        5
+ 125  Roy Koopa                         6
+ 126  Ludwig von Koopa                  7
+ 127  Cannon Box                        ]
+ 128  Propeller Box                     }
+ 129  Goomba Mask                       )
+ 130  Bullet Bill Mask                  °
+ 131  Red POW Box                       ²
+ 132  ON/OFF Trampoline                 À
+
+-----------------------------------------------------------------------
+2) Other per-object numeric fields
+-----------------------------------------------------------------------
+  x, y      Position in sub-pixels. 160 sub-pixels = 1 tile.
+            tile_col = x // 160, tile_row = y // 160
+  w, h      Size in tiles (direct tile counts, except Pipe — see
+            mm2_viewer_json.py:obj_tile_size).
+  flag      Bitfield: orientation/direction/state/color, meaning is
+            object-specific (e.g. for Pipe, flag % 0x80 selects
+            direction: 0x00=Right, 0x20=Left, 0x40=Up, 0x60=Down; for
+            slopes, bit 0x100000 selects left vs. right slope). Not
+            fully documented for every object type.
+  cflag     Secondary flag bitfield (object-specific, e.g. pipe link
+            color/index packing).
+  ex        Extra parameter, object-specific (often unused/0).
+  cid       "Connected"/companion id — index of a linked object
+            (e.g. paired pipe/key-door), or -1 if unused.
+  lid       Link id — used for Snake Blocks, Tracks, etc. to group
+            objects that move together. -1 if unused.
+  sid       Sound id — index into the sound-effect array, or -1.
+  link_type Link relationship type for cid-linked objects (raw code,
+            object-specific; not yet enumerated here).
+
+-----------------------------------------------------------------------
+3) ground[].id / ground[].background_id
+-----------------------------------------------------------------------
+Raw u8 terrain-tile graphic indices (0-255), one per ground cell.
+These select a terrain sprite/variant per theme in toost's tile sheet
+and are NOT yet mapped to names in this project — treat any non-zero
+value as "solid ground" ('#') for ASCII purposes.
+
+-----------------------------------------------------------------------
+4) Level/world-level "_raw" enum fields
+-----------------------------------------------------------------------
+gamestyle_raw (Level.Gamestyle):
+  12621 = SMB1   13133 = SMB3   21847 = NSMBU
+  22323 = SM3DW  22349 = SMW
+
+theme_raw (per-map Level.Map.Theme):
+  0 = Overworld   1 = Underground   2 = Castle      3 = Airship
+  4 = Underwater  5 = Ghost House   6 = Snow        7 = Desert
+  8 = Sky         9 = Forest
+
+autoscroll_speed_raw (Level.AutoscrollSpeed):
+  0 = x1   1 = x2   2 = x3
+
+autoscroll_type_raw (Level.Map.AutoscrollType):
+  0 = None   1 = Slow   2 = Normal   3 = Fast   4 = Custom
+
+boundary_type_raw (Level.Map.BoundaryType):
+  0 = Built Above Line   1 = Built Below Line
+
+orientation_raw (Level.Map.Orientation):
+  0 = Horizontal   1 = Vertical
+
+liquid_mode_raw (Level.Map.LiquidMode):
+  0 = Static   1 = Rising/Falling   2 = Rising and Falling
+
+liquid_speed_raw (Level.Map.LiquidSpeed):
+  0 = None   1 = x1   2 = x2   3 = x3
+
+game_version_raw (Level.GameVersion):
+  0 = v1.0.0   1 = v1.0.1   2 = v1.1.0
+  3 = v2.0.0   4 = v3.0.0   5 = v3.0.1   33 = unknown
+
+clear_condition_category_raw (Level.ClearConditionCategory):
+  0 = None   1 = Parts   2 = Status   3 = Actions
+
+clear_condition_type_raw (Level.ClearCondition):
+  Large enum of ~110 specific conditions (e.g. "reach the goal as
+  Fire Mario", "...after defeating all Goomba", etc). See the
+  ClearCondition enum in level.py for the full id -> condition list;
+  toost JSON exports already include the human-readable
+  "clear_condition_type" string alongside this code.
