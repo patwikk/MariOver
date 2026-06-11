@@ -148,7 +148,7 @@ OBJ_ID_MAP = {
     6:   "obj_rock_res",            # Hard Block (verified: MM2 "Stone" id=6)
     7:   "obj_rock_res",            # Ground-as-object (approx; terrain is S2)
     8:   "obj_coin_res",            # Coin
-    9:   "obj_tuberia_res",         # Pipe
+    9:   None,                      # Pipe -> emitted to S5, not S4 (see build_pipes)
     10:  "obj_spring_res",          # Spring / Trampoline
     11:  "obj_platform_res",        # Lift (approx)
     12:  "obj_thwomp_res",          # Thwomp
@@ -274,6 +274,33 @@ OBJ_ID_MAP = {
     132: "obj_spring_res",          # ON/OFF Trampoline (approx)
 }
 
+# Pipes are NOT S4 objects — they live in the S5 section with their own schema
+# (verified from an editor-saved .swe). A pipe is defined by two endpoints,
+# (xx,yy) -> (t_x_pos,t_y_pos), spanning its length, plus a direction `dir`.
+# This template holds the constant/default fields; per-pipe code fills the
+# positions and dir.
+S5_PIPE_TEMPLATE = {
+    "sz": 0, "t_dir": 0, "clr": 0, "sclx": 1, "t_rot": 0, "wrp": 0,
+    "t_s_sclx": 1, "msk": 0, "xscl": 1, "t_yscl": 1, "rot": 0, "t_sz": 0,
+    "t_clr": 0, "yscl": 1, "t_xscl": 1,
+}
+
+# MM2 pipe direction (flag % 0x80) -> SWE pipe `dir`. The sample editor pipe
+# was horizontal with dir=0; the other three are a best guess (R=0,L=1,U=2,D=3)
+# and easy to retune if a direction comes out wrong in-game.
+MM2_PIPE_DIR = {0x00: "R", 0x20: "L", 0x40: "U", 0x60: "D"}
+PIPE_DIR_MAP = {"R": 0, "L": 1, "U": 2, "D": 3}
+
+# Some object types render one tile lower than the generic formula predicts
+# (their SMMWE anchor differs from the generic top-left-cell convention).
+# Value is a pixel delta subtracted from yy (positive = move up on screen,
+# since SWE yy grows downward). Confirmed: Saw (68) and Big Coin (70) both
+# need to move up by one tile.
+OBJ_Y_OFFSET_PX = {
+    68: PX,   # Saw -> obj_grinder_res
+    70: PX,   # Big Coin (10-coin) -> obj_coin10_res
+}
+
 # Every key an S4 object dict carries (from a real .swe). All flags default to
 # 0; we only fill ID / xx / yy / scl / dir.
 S4_TEMPLATE = {
@@ -333,12 +360,71 @@ def build_ground(ground):
     return out
 
 
+def build_pipes(objects):
+    """MM2 pipes (id 9) -> SWE S5 entries.
+
+    Pipes are "left-anchor" objects per mm2_viewer_json.py's obj_anchor /
+    obj_tile_size: col = x // 160 with NO `-w//2` correction (our generic
+    object_cell() applies that correction and was wrong for pipes -- likely
+    the cause of the truncated/misplaced pipes seen so far), and the pipe's
+    *length* always comes from `h` regardless of direction (the cross-
+    section on the other axis is fixed at 2 tiles).
+
+    Each direction's MM2 anchor point (base_col, base_row) is the pipe's
+    *closed* end; the open end is `length` tiles further along the pipe's
+    axis. We emit (xx,yy) = open end and (t_x_pos,t_y_pos) = closed/anchor
+    end, matching the one verified sample (a set of "U" pipes of varying
+    length in p2.swe, all sharing a common t_y with yy < t_y). R/L/D are
+    best-effort extrapolations of that pattern and untested in-game."""
+    out = []
+    for o in objects:
+        if o.get("id") != 9:
+            continue
+        length = max(1, o.get("h", 1))
+        base_col = o["x"] // SUBPX
+        base_row = o["y"] // SUBPX
+        direction = MM2_PIPE_DIR.get(o.get("flag", 0) % 0x80, "R")
+
+        if direction == "U":
+            x = base_col * PX
+            y_min = ground_yy(base_row + length - 1)   # top (open end)
+            xx, yy = x, y_min
+            t_x, t_y = x, y_min + length * PX          # bottom (anchor)
+        elif direction == "D":
+            x = (base_col - 1) * PX
+            y_min = ground_yy(base_row)                # top (anchor)
+            xx, yy = x, y_min + length * PX            # bottom (open end)
+            t_x, t_y = x, y_min
+        elif direction == "R":
+            y = ground_yy(base_row)
+            x_left = base_col * PX                     # left (anchor)
+            xx, yy = x_left + length * PX, y           # right (open end)
+            t_x, t_y = x_left, y
+        else:  # L
+            y = ground_yy(base_row + 1)
+            x_left = (base_col - length + 1) * PX      # left (open end)
+            xx, yy = x_left, y
+            t_x, t_y = x_left + length * PX, y         # right (anchor)
+
+        entry = dict(S5_PIPE_TEMPLATE)
+        entry.update({
+            "xx": xx, "yy": yy,
+            "t_x_pos": t_x, "t_y_pos": t_y,
+            "dir": PIPE_DIR_MAP[direction],
+        })
+        out.append(entry)
+    return out
+
+
 def build_objects(objects):
-    """MM2 objects[] -> SWE S4. Returns (s4_list, dropped_counts)."""
+    """MM2 objects[] -> SWE S4. Returns (s4_list, dropped_counts).
+    Pipes (id 9) are handled separately by build_pipes and skipped here."""
     out = []
     dropped = {}
     for o in objects:
         oid = o.get("id")
+        if oid == 9:
+            continue
         swe_id = OBJ_ID_MAP.get(oid)
         if swe_id is None:
             name = o.get("name", f"id={oid}")
@@ -351,7 +437,7 @@ def build_objects(objects):
         entry.update({
             "ID": swe_id,
             "xx": col * PX,
-            "yy": (FIELD_HEIGHT_TILES - 1 - row) * PX,
+            "yy": (FIELD_HEIGHT_TILES - 1 - row) * PX - OBJ_Y_OFFSET_PX.get(oid, 0),
             "scl": scl,
             "dir": 0,   # best-effort: MM2 flag bitfields aren't carried over
         })
@@ -418,14 +504,17 @@ def build_metadata(j, *, user, name, desc, date_str, time_str):
 
 def build_world(j, *, user, name, desc, date_str, time_str):
     """Build a full SWE world dict (S0 or a populated SB1) from one map JSON."""
-    s4, dropped = build_objects(j.get("objects", []))
+    objects = j.get("objects", [])
+    s5 = build_pipes(objects)
+    s4, dropped = build_objects(objects)
+
     world = {
         "S1": [build_metadata(j, user=user, name=name, desc=desc,
                               date_str=date_str, time_str=time_str)],
         "S2": build_ground(j.get("ground", [])),
         "S3": [],
         "S4": s4,
-        "S5": [],
+        "S5": s5,
         "S6": [],
         "S7": [],
         "S8": [],
@@ -525,6 +614,7 @@ def main():
     print(f"Wrote {out_path} ({len(data)} bytes)")
     print(f"  ground tiles : {len(s0['S2'])}")
     print(f"  objects      : {len(s0['S4'])}")
+    print(f"  pipes        : {len(s0['S5'])}")
     if dropped:
         total = sum(dropped.values())
         print(f"  dropped {total} object(s) with no SMMWE equivalent:")
