@@ -40,5 +40,3 @@ types-setuptools
 
 # Documentation.
 sphinx
-
-git+https://github.com/kinnay/NintendoClients@master#egg=nintendoclients
