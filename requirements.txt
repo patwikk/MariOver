@@ -34,7 +34,7 @@ hilbertcurve>=2
 imageio
 matplotlib
 scipy
-pycryptodome
+crypto
 
 # Testing
 pytest
@@ -43,4 +43,3 @@ types-setuptools
 # Documentation.
 sphinx
 
-git+https://github.com/kinnay/NintendoClients@master#egg=nintendoclients
