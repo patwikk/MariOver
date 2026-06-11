@@ -39,3 +39,7 @@ python interactive_tile_level_generator.py --model_path (generated_dataset) --lo
 
 **Running MarioMaker_create_ascii_captions.py:**
 python MarioMaker_create_ascii_captions.py --dataset (input.json) --tileset (tileset.json) --output (output.json)
+
+**Converting a .json to BCD**
+python json_to_bcd.py (exact .json file location) --toost-compat 
+--toost-compat is optional however it will make some custom levels appear in toost
