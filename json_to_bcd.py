@@ -39,6 +39,10 @@ Usage
 -----
     python json_to_bcd.py bcd_levels/json/3000009_overworld.json
     python json_to_bcd.py bcd_levels/json/3000009_overworld.json -o out/3000009.bcd
+
+    # Drop/clamp objects this build of toost can't render (see toost_compat.py),
+    # so the resulting .bcd can be previewed with toost without crashing:
+    python json_to_bcd.py bcd_levels/json/3000009_overworld.json --toost-compat
 """
 
 import argparse
@@ -88,8 +92,11 @@ MAP_HEADER_SIZE   = 72
 
 def pack_str_utf16(s, size_bytes):
     raw = (s or "").encode("utf-16-le")
-    if len(raw) > size_bytes:
-        raw = raw[:size_bytes]
+    # Toost reads these fields as null-terminated char16_t* strings, so
+    # always leave room for a trailing u"\x00" even when truncating.
+    max_bytes = size_bytes - 2
+    if len(raw) > max_bytes:
+        raw = raw[:max_bytes]
         if len(raw) % 2:
             raw = raw[:-1]
     return raw.ljust(size_bytes, b"\x00")
@@ -357,6 +364,9 @@ def parse_args():
     )
     p.add_argument("json_path", help="Path to a *_overworld.json or *_subworld.json file")
     p.add_argument("-o", "--output", help="Output .bcd path (default: <stem>.bcd next to the input)")
+    p.add_argument("--toost-compat", action="store_true",
+                   help="Drop/clamp objects toost's local sprite atlas can't render (see toost_compat.py)")
+    p.add_argument("--leveldata", help="Path to toost's LevelData.hpp (used with --toost-compat)")
     return p.parse_args()
 
 
@@ -376,6 +386,17 @@ if __name__ == "__main__":
         print(f"  [WARN] no overworld JSON found, writing an empty overworld map")
     if subworld_json is None:
         print(f"  [WARN] no subworld JSON found, writing an empty subworld map")
+
+    if args.toost_compat:
+        import toost_compat
+
+        leveldata_path = Path(args.leveldata) if args.leveldata else toost_compat.DEFAULT_LEVELDATA
+        if not leveldata_path.exists():
+            raise SystemExit(f"Could not find LevelData.hpp at {leveldata_path} (pass --leveldata)")
+
+        constants, location_keys = toost_compat.parse_leveldata(leveldata_path)
+        overworld_json = toost_compat.sanitize_map_json(overworld_json, constants, location_keys, "overworld")
+        subworld_json = toost_compat.sanitize_map_json(subworld_json, constants, location_keys, "subworld")
 
     payload = build_payload(overworld_json, subworld_json)
     bcd_bytes = build_bcd(payload)
