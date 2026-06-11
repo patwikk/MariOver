@@ -617,6 +617,9 @@ def main():
         train_loss = 0.0
         
         for batch in train_dataloader:
+            if batch is None:
+                continue
+
             # Add explicit memory clearing at start of batch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -659,6 +662,9 @@ def main():
             val_loss = 0.0
             with torch.no_grad():
                 for val_batch in val_dataloader:
+                    if val_batch is None:
+                        continue
+
                     val_batch_loss = process_diffusion_batch(
                         args, model, val_batch, noise_scheduler, loss_fn, tokenizer_hf, text_encoder, accelerator
                     )
