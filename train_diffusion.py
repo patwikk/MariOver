@@ -450,8 +450,13 @@ def main():
         betas=(0.9, 0.999)  # Default AdamW betas
     )
     
+    # Capture lengths BEFORE accelerator.prepare() replaces the dataloader.
+    # After prepare(), DataLoaderShard may report len==0 when safe_batches bypasses it.
+    num_train_batches = len(train_dataloader)
+    num_val_batches = len(val_dataloader) if val_dataloader is not None else 0
+
     # Setup learning rate scheduler
-    total_training_steps = (len(train_dataloader) * args.num_epochs) // args.gradient_accumulation_steps
+    total_training_steps = (num_train_batches * args.num_epochs) // args.gradient_accumulation_steps
     warmup_steps = int(total_training_steps * args.lr_warmup_percentage)  
 
     print(f"Warmup period will be {warmup_steps} steps out of {total_training_steps}")
@@ -470,7 +475,7 @@ def main():
     
     # Training loop
     global_step = 0
-    progress_bar = tqdm(total=args.num_epochs * len(train_dataloader), disable=not accelerator.is_local_main_process)
+    progress_bar = tqdm(total=args.num_epochs * num_train_batches, disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     
     # Get formatted timestamp for filenames
@@ -494,7 +499,7 @@ def main():
                 "epoch": epoch,
                 "loss": loss,
                 "lr": lr,
-                "step": step if step is not None else epoch * len(train_dataloader),
+                "step": step if step is not None else epoch * num_train_batches,
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             if val_loss is not None:
@@ -648,7 +653,7 @@ def main():
             global_step += 1
         
         # Calculate average training loss for the epoch
-        avg_train_loss = train_loss / len(train_dataloader)
+        avg_train_loss = train_loss / max(num_train_batches, 1)
         
         # Calculate validation loss if validation dataset exists and it's time to validate
         val_loss = None
@@ -670,7 +675,7 @@ def main():
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
 
-            val_loss /= len(val_dataloader)
+            val_loss /= max(num_val_batches, 1)
 
             if args.text_conditional and args.plot_validation_caption_score:
                 # Compute caption match score for this data
@@ -1048,48 +1053,31 @@ def prepare_conditioned_batch(args, tokenizer_hf, text_encoder, scenes, captions
 
 def safe_batches(dataloader):
     """
-    Wraps an accelerate-prepared DataLoaderShard so that None batches never
-    reach accelerate's internal send_to_device call.
-
-    Root cause: accelerate's DataLoaderShard.__iter__ does:
-        current_batch = next(dataloader_iter)      # may be None
-        send_to_device(current_batch, self.device)  # crashes if None
-    The variable 'current_batch' is therefore never assigned when the first
-    yielded value is None, causing UnboundLocalError.
-
-    Fix: we drive iteration ourselves via the underlying dataset/sampler so
-    that accelerate's broken __iter__ is bypassed entirely.  We re-use the
-    accelerate dataloader only for its .dataset attribute (already on the
-    correct device via accelerator.prepare), and build our own loop.
+    Wraps an accelerate-prepared DataLoaderShard so None batches never reach
+    accelerate's internal send_to_device, which causes:
+        UnboundLocalError: local variable 'current_batch' referenced before assignment
+    We drive iteration from the underlying dataset directly, bypassing the shard.
     """
     from torch.utils.data import DataLoader
     from torch.utils.data.dataloader import default_collate
-    from accelerate.data_loader import DataLoaderShard
 
-    # If it's an accelerate shard, grab the real underlying DataLoader.
-    # accelerate stores it as ._loader or we can reconstruct from .dataset.
-    underlying = getattr(dataloader, '_loader', None)
-    if underlying is None:
-        # Reconstruct a plain DataLoader that mirrors the shard's settings.
-        ds = dataloader.dataset
-        bs = dataloader.batch_size or 1
+    ds = dataloader.dataset
+    bs = dataloader.batch_size or 1
 
-        def _collate(batch):
-            batch = [x for x in batch if x is not None]
-            return default_collate(batch) if batch else None
+    def _collate(batch):
+        batch = [x for x in batch if x is not None]
+        return default_collate(batch) if batch else None
 
-        underlying = DataLoader(
-            ds,
-            batch_size=bs,
-            shuffle=False,          # accelerate handles shuffling via sampler
-            collate_fn=_collate,
-            num_workers=0,          # safe default; avoids re-spawning workers
-        )
-
+    underlying = DataLoader(
+        ds,
+        batch_size=bs,
+        shuffle=False,
+        collate_fn=_collate,
+        num_workers=0,
+    )
     for batch in underlying:
-        if batch is None:
-            continue
-        yield batch
+        if batch is not None:
+            yield batch
 
 
 def process_diffusion_batch(
