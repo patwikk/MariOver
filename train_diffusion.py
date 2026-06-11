@@ -251,40 +251,6 @@ def infer_global_step_from_log(log_file):
         raise RuntimeError(f"Could not read log file {log_file} to infer global step: {e}")
     return global_step
 
-def none_filtering_collate(batch):
-    """
-    Collate function that filters out None samples before batching.
-    This prevents accelerate's DataLoaderShard from hitting an
-    UnboundLocalError when the very first item yielded is None.
-    """
-    batch = [item for item in batch if item is not None]
-    if len(batch) == 0:
-        return None
-    from torch.utils.data.dataloader import default_collate
-    return default_collate(batch)
-
-
-def _wrap_dataloader_with_none_filter(dataloader):
-    """
-    Re-creates a DataLoader from an existing one, injecting none_filtering_collate.
-    Preserves all other DataLoader settings.
-    """
-    from torch.utils.data import DataLoader
-    return DataLoader(
-        dataset=dataloader.dataset,
-        batch_size=dataloader.batch_size,
-        shuffle=isinstance(dataloader.sampler, torch.utils.data.RandomSampler),
-        num_workers=dataloader.num_workers,
-        collate_fn=none_filtering_collate,
-        pin_memory=dataloader.pin_memory,
-        drop_last=dataloader.drop_last,
-        timeout=dataloader.timeout,
-        worker_init_fn=dataloader.worker_init_fn,
-        prefetch_factor=dataloader.prefetch_factor if dataloader.num_workers > 0 else None,
-        persistent_workers=dataloader.persistent_workers if dataloader.num_workers > 0 else False,
-    )
-
-
 def main():
     args = parse_args()
 
@@ -423,13 +389,6 @@ def main():
                                         augment=args.augment, num_tiles=args.num_tiles,
                                         negative_prompt_training=args.negative_prompt_training,
                                         block_embeddings=block_embeddings, batch_size=args.batch_size)
-
-    # Wrap dataloaders with a None-filtering collate function so that accelerate's
-    # DataLoaderShard never receives a None batch (which causes the UnboundLocalError
-    # "current_batch referenced before assignment" inside accelerate's __iter__).
-    train_dataloader = _wrap_dataloader_with_none_filter(train_dataloader)
-    if val_dataloader is not None:
-        val_dataloader = _wrap_dataloader_with_none_filter(val_dataloader)
 
 
     first_sample = train_dataloader.dataset[0]
@@ -657,9 +616,7 @@ def main():
         model.train()
         train_loss = 0.0
         
-        for batch in train_dataloader:
-            if batch is None:
-                continue
+        for batch in safe_batches(train_dataloader):
 
             # Add explicit memory clearing at start of batch
             if torch.cuda.is_available():
@@ -702,9 +659,7 @@ def main():
             model.eval()
             val_loss = 0.0
             with torch.no_grad():
-                for val_batch in val_dataloader:
-                    if val_batch is None:
-                        continue
+                for val_batch in safe_batches(val_dataloader):
 
                     val_batch_loss = process_diffusion_batch(
                         args, model, val_batch, noise_scheduler, loss_fn, tokenizer_hf, text_encoder, accelerator
@@ -1090,6 +1045,52 @@ def prepare_conditioned_batch(args, tokenizer_hf, text_encoder, scenes, captions
             timesteps_for_train = torch.cat([timesteps] * 2)  # Repeat timesteps twice
 
         return combined_embeddings, scenes_for_train, timesteps_for_train
+
+def safe_batches(dataloader):
+    """
+    Wraps an accelerate-prepared DataLoaderShard so that None batches never
+    reach accelerate's internal send_to_device call.
+
+    Root cause: accelerate's DataLoaderShard.__iter__ does:
+        current_batch = next(dataloader_iter)      # may be None
+        send_to_device(current_batch, self.device)  # crashes if None
+    The variable 'current_batch' is therefore never assigned when the first
+    yielded value is None, causing UnboundLocalError.
+
+    Fix: we drive iteration ourselves via the underlying dataset/sampler so
+    that accelerate's broken __iter__ is bypassed entirely.  We re-use the
+    accelerate dataloader only for its .dataset attribute (already on the
+    correct device via accelerator.prepare), and build our own loop.
+    """
+    from torch.utils.data import DataLoader
+    from torch.utils.data.dataloader import default_collate
+    from accelerate.data_loader import DataLoaderShard
+
+    # If it's an accelerate shard, grab the real underlying DataLoader.
+    # accelerate stores it as ._loader or we can reconstruct from .dataset.
+    underlying = getattr(dataloader, '_loader', None)
+    if underlying is None:
+        # Reconstruct a plain DataLoader that mirrors the shard's settings.
+        ds = dataloader.dataset
+        bs = dataloader.batch_size or 1
+
+        def _collate(batch):
+            batch = [x for x in batch if x is not None]
+            return default_collate(batch) if batch else None
+
+        underlying = DataLoader(
+            ds,
+            batch_size=bs,
+            shuffle=False,          # accelerate handles shuffling via sampler
+            collate_fn=_collate,
+            num_workers=0,          # safe default; avoids re-spawning workers
+        )
+
+    for batch in underlying:
+        if batch is None:
+            continue
+        yield batch
+
 
 def process_diffusion_batch(
     args, model, batch, noise_scheduler, loss_fn, tokenizer_hf, text_encoder, accelerator
