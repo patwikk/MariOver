@@ -1,4 +1,22 @@
-1. Extract BCD's and Translate them into .json and ASCII (OPTIONAL)
+1. Install necessary requirements
+
+	Requires python 3.10 or 3.11. More recent versions will not work with torch 2.6.0.
+
+	Install the following via the command line:
+
+	pip install -r requirements.txt
+	pip install -r requirements_mario_diffusion.txt
+
+	Install the following outside of the command line:
+	Git for Windows 
+	Ollama
+
+	For extract_levels_to_ascii you also need a internet connection, as it grabs from HuggingFace.
+	A NVIDIA GPU is also practically necessary.
+
+
+
+2. Extract BCD's and Translate them into .json and ASCII (OPTIONAL)
 	(This step is irrelevant if you already have a folder with ASCIIs or .jsons) 
 
 	Command Line:
@@ -7,7 +25,7 @@
 
 	Once run your folder will have 4 folders, with the bcd's, the .json's, the direct images of the .jsons, and the ASCII representations of these levels.
 
-2. Use ASCII folder to run the full pipeline
+3. Use ASCII folder to run the full pipeline
 	Once you have a folder full of ASCII files, the rest is simple.
 
 	Command Line: 
