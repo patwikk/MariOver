@@ -385,9 +385,13 @@ def build_pipes(objects):
     (xx,yy) is the TOP-LEFT corner of the pipe's MM2 tile footprint, per
     obj_anchor()/obj_tile_size() in mm2_viewer_json.py (no `-w//2`
     correction; `length` always comes from `h` regardless of direction).
-    This anchor convention is verified for U; R/D/L anchors are an
-    untested extrapolation since the 4 samples were isolated pipes with no
-    surrounding terrain to check position against."""
+    This anchor convention is in-game verified for U. For R/D/L it is
+    derived by applying the same bottom-left -> top-left transform that
+    obj_anchor()/obj_tile_size() use for those directions (e.g. R's
+    bottom-left (base_col, base_row-1) with a 2-row-tall footprint gives
+    top-left (base_col, base_row), matching the formula below) -- but the
+    resulting absolute placement against terrain is not yet in-game
+    verified for R/D/L."""
     out = []
     for o in objects:
         if o.get("id") != 9:
