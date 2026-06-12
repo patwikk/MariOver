@@ -19,7 +19,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Evaluate tile type distribution across model checkpoints"
     )
-    parser.add_argument("--model_path", type=str, required=True, help="Path to the trained model directory")
+    parser.add_argument("--model_path", type=str, default=None, help="Path to the trained model directory")
+    parser.add_argument("--json_path", type=str, default=None, help="Path to a single dataset JSON file to evaluate tile distribution for (alternative to --model_path)")
     parser.add_argument("--num_samples", type=int, default=100, help="Number of levels to generate per checkpoint")
     parser.add_argument("--batch_size", type=int, default=25, help="Batch size for generation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
@@ -30,7 +31,14 @@ def parse_args():
     parser.add_argument("--inference_steps", type=int, default=common_settings.NUM_INFERENCE_STEPS, help="Denoising steps")
     parser.add_argument("--guidance_scale", type=float, default=common_settings.GUIDANCE_SCALE, help="Classifier-free guidance scale")
     parser.add_argument("--caption", type=str, default="", help="Caption for conditional models (empty = unconditioned)")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if not args.model_path and not args.json_path:
+        parser.error("Either --model_path or --json_path must be provided.")
+    if args.model_path and args.json_path:
+        parser.error("Provide only one of --model_path or --json_path, not both.")
+
+    return args
 
 
 # Authoritative MM2 char→name mapping sourced from OBJ_META in mm2_viewer_json.py.
@@ -223,6 +231,67 @@ def count_scene_presence(scenes, id_to_char, char_to_name):
     return dict(counts)
 
 
+def load_scenes_from_json(json_path):
+    """Load scenes from a dataset JSON file: a list of {"scene": [[...]], ...}
+    entries, or a list of raw 2D scenes."""
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+
+    scenes = []
+    for item in data:
+        scenes.append(item["scene"] if isinstance(item, dict) else item)
+    return scenes
+
+
+def evaluate_json_dataset(json_path, id_to_char, char_to_name, tile_names):
+    """Evaluate tile distribution and scene presence for a single dataset JSON
+    file, writing the results to a single summary JSON file."""
+    if not os.path.exists(json_path):
+        print(f"Error: JSON file '{json_path}' does not exist.")
+        return
+
+    scenes = load_scenes_from_json(json_path)
+    if not scenes:
+        print(f"No scenes found in {json_path}")
+        return
+
+    counts = count_tiles(scenes, id_to_char, char_to_name)
+    total = sum(counts.values())
+
+    presence_counts = count_scene_presence(scenes, id_to_char, char_to_name)
+    num_scenes = len(scenes)
+
+    present_tiles = sorted(
+        (n for n in tile_names if counts.get(n, 0) > 0),
+        key=lambda n: -counts[n],
+    )
+
+    result = {
+        "source": json_path,
+        "num_scenes": num_scenes,
+        "total_tiles": total,
+        "tile_counts": {n: counts[n] for n in present_tiles},
+        "tile_percentages": {n: round(100.0 * counts[n] / total, 2) for n in present_tiles} if total else {},
+        "scene_presence_counts": {n: presence_counts.get(n, 0) for n in present_tiles},
+        "scene_presence_percentages": {
+            n: round(100.0 * presence_counts.get(n, 0) / num_scenes, 2) for n in present_tiles
+        } if num_scenes else {},
+    }
+
+    base, _ = os.path.splitext(json_path)
+    out_path = f"{base}_tile_distribution.json"
+    with open(out_path, 'w') as f:
+        json.dump(result, f, indent=2)
+
+    summary = "  ".join(
+        f"{n}={counts[n]} ({result['tile_percentages'][n]:.1f}%)"
+        for n in present_tiles
+    )
+    print(f"\n{json_path} - Tile Distribution ({num_scenes} samples, {total} tiles)")
+    print(f"  {summary}")
+    print(f"\nDone. Results saved to: {out_path}")
+
+
 def write_distribution(path, header, counts, total, tile_names):
     """Write a readable distribution file sorted by frequency."""
     present = [(n, counts.get(n, 0)) for n in tile_names if counts.get(n, 0) > 0]
@@ -323,6 +392,10 @@ def main():
         if name not in seen:
             seen.add(name)
             tile_names.append(name)
+
+    if args.json_path:
+        evaluate_json_dataset(args.json_path, id_to_char, char_to_name, tile_names)
+        return
 
     checkpoint_dirs = collect_checkpoint_dirs(args.model_path)
     if not checkpoint_dirs:
