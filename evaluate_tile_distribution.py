@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument("--height", type=int, default=common_settings.MARIO_HEIGHT, help="Height of generated levels")
     parser.add_argument("--inference_steps", type=int, default=common_settings.NUM_INFERENCE_STEPS, help="Denoising steps")
     parser.add_argument("--guidance_scale", type=float, default=common_settings.GUIDANCE_SCALE, help="Classifier-free guidance scale")
-    parser.add_argument("--caption", type=str, default="", help="Caption for conditional models (empty = unconditioned)")
+    parser.add_argument("--captions_json", type=str, default=None, help="Path to a dataset JSON file (list of {\"caption\": ...} entries). If given, a fixed set of captions sampled from it is used to condition generation for every checkpoint, instead of generating unconditionally.")
     args = parser.parse_args()
 
     if not args.model_path and not args.json_path:
@@ -154,8 +154,12 @@ def build_char_to_name(tileset_path):
     return char_to_name
 
 
-def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_scale, seed, height, width, caption=""):
-    """Generate num_samples levels, returning a list of 2D tile-index scenes."""
+def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_scale, seed, height, width, captions=None):
+    """Generate num_samples levels, returning a list of 2D tile-index scenes.
+
+    If `captions` is given (a list of length num_samples), sample i is generated
+    conditioned on captions[i]. Otherwise generation is unconditional.
+    """
     is_unconditional = isinstance(pipe, UnconditionalDDPMPipeline)
     is_fdm = isinstance(pipe, FDMPipeline)
 
@@ -166,14 +170,16 @@ def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_sc
 
     all_scenes = []
     remaining = num_samples
+    offset = 0
 
     while remaining > 0:
         current_batch = min(batch_size, remaining)
         generator = torch.Generator(device).manual_seed(seed)
+        batch_captions = captions[offset:offset + current_batch] if captions is not None else None
 
         with torch.no_grad():
             if is_fdm:
-                param_values = {"caption": [caption] * current_batch, "batch_size": current_batch}
+                param_values = {"caption": batch_captions if batch_captions is not None else [""] * current_batch, "batch_size": current_batch}
             elif is_unconditional:
                 param_values = {
                     "num_inference_steps": inference_steps,
@@ -182,12 +188,13 @@ def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_sc
                 }
             else:
                 param_values = {
-                    "caption": [caption] * current_batch,
                     "num_inference_steps": inference_steps,
                     "height": height, "width": width,
                     "guidance_scale": guidance_scale,
                     "output_type": "tensor", "batch_size": current_batch,
                 }
+                if batch_captions is not None:
+                    param_values["caption"] = batch_captions
 
             samples = pipe(generator=generator, **param_values).images
 
@@ -197,6 +204,7 @@ def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_sc
             all_scenes.append(scene)
 
         remaining -= current_batch
+        offset += current_batch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -229,6 +237,13 @@ def count_scene_presence(scenes, id_to_char, char_to_name):
         for name in present:
             counts[name] += 1
     return dict(counts)
+
+
+def load_captions_from_json(json_path):
+    """Load caption strings from a dataset JSON file (list of dicts with a 'caption' key)."""
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return [entry["caption"] for entry in data if isinstance(entry, dict) and "caption" in entry]
 
 
 def load_scenes_from_json(json_path):
@@ -397,6 +412,19 @@ def main():
         evaluate_json_dataset(args.json_path, id_to_char, char_to_name, tile_names)
         return
 
+    fixed_captions = None
+    if args.captions_json:
+        captions_pool = load_captions_from_json(args.captions_json)
+        if not captions_pool:
+            print(f"No captions found in {args.captions_json}")
+            return
+        if len(captions_pool) >= args.num_samples:
+            fixed_captions = random.sample(captions_pool, args.num_samples)
+        else:
+            fixed_captions = random.choices(captions_pool, k=args.num_samples)
+        print(f"Using {args.num_samples} fixed captions sampled from {args.captions_json} "
+              f"(pool of {len(captions_pool)}) for every checkpoint")
+
     checkpoint_dirs = collect_checkpoint_dirs(args.model_path)
     if not checkpoint_dirs:
         print(f"No checkpoints found in {args.model_path}")
@@ -438,7 +466,7 @@ def main():
                 seed=args.seed,
                 height=args.height,
                 width=args.width,
-                caption=args.caption,
+                captions=fixed_captions,
             )
 
             counts = count_tiles(scenes, id_to_char, char_to_name)
