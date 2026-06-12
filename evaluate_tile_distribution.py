@@ -385,10 +385,8 @@ def plot_scene_presence(history, tile_names, out_path):
 
 
 def plot_comparison_bars(tile_names, model_values, dataset_values, title, ylabel, out_path):
-    """Bar chart with one bar per tile, showing (model_value - dataset_value).
-    Bars above the zero line mean the model over-produces that tile relative
-    to the training dataset; bars below mean it under-produces it. A perfect
-    match to the training distribution is a flat line at 0."""
+    """Grouped bar chart with two bars per tile: one for the model output and
+    one for the training dataset, side by side."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -396,17 +394,21 @@ def plot_comparison_bars(tile_names, model_values, dataset_values, title, ylabel
     if not tile_names:
         return
 
-    diffs = [model_values.get(n, 0.0) - dataset_values.get(n, 0.0) for n in tile_names]
-    colors = ['tab:blue' if d >= 0 else 'tab:red' for d in diffs]
+    model_bars = [model_values.get(n, 0.0) for n in tile_names]
+    dataset_bars = [dataset_values.get(n, 0.0) for n in tile_names]
 
-    fig, ax = plt.subplots(figsize=(max(12, len(tile_names) * 0.4), 7))
-    ax.bar(range(len(tile_names)), diffs, color=colors)
-    ax.axhline(0, color='black', linewidth=0.8)
-    ax.set_xticks(range(len(tile_names)))
+    x = np.arange(len(tile_names))
+    width = 0.4
+
+    fig, ax = plt.subplots(figsize=(max(12, len(tile_names) * 0.5), 7))
+    ax.bar(x - width / 2, model_bars, width, label='Model output', color='tab:blue')
+    ax.bar(x + width / 2, dataset_bars, width, label='Training dataset', color='tab:orange')
+    ax.set_xticks(x)
     ax.set_xticklabels(tile_names, rotation=90, fontsize='small')
     ax.set_xlim(-0.5, len(tile_names) - 0.5)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
+    ax.legend()
     fig.tight_layout()
     fig.savefig(out_path, bbox_inches='tight')
     plt.close(fig)
@@ -414,8 +416,9 @@ def plot_comparison_bars(tile_names, model_values, dataset_values, title, ylabel
 
 def evaluate_epoch_vs_dataset(epoch_dir, json_path, id_to_char, char_to_name, tile_names, args, device):
     """Compare a single trained checkpoint's generated-sample tile distribution
-    and scene presence against the training dataset's distribution, saving bar
-    charts of (model - dataset) per tile for both metrics."""
+    and scene presence against the training dataset's distribution, saving
+    grouped bar charts (model vs. dataset, side by side per tile) for both
+    metrics."""
     if not os.path.isdir(epoch_dir):
         print(f"Error: epoch directory '{epoch_dir}' does not exist.")
         return
