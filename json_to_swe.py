@@ -356,8 +356,16 @@ S4_TEMPLATE = {
 # reference save. rht/dwn/up/lft/dir are direction-related flags whose
 # per-direction meaning isn't reverse-engineered yet; the reference (default
 # placement) had dwn=1 and everything else 0, used as a constant.
+#
+# "dph" was missing here too: like the Lift -> obj_platform_res crash (S4
+# entry missing dph/wth/hht/spr), a level with a Cannon crashed on entering
+# play mode with "instance_create_depth argument 2 ... expecting a Number",
+# this time from obj_load_guardabot (the S6 loader) instead of
+# obj_creator_jugar_editar (the S4 loader). dph=0 is GameMaker's default
+# draw depth and matches obj_bullebill_base_res's dph (the other
+# cannon/blaster-family S7 entry, see PLATFORM_S7_IDS).
 S6_CANNON_TEMPLATE = {
-    "rht": 0, "dwn": 1, "up": 0, "lft": 0, "dir": 0,
+    "rht": 0, "dwn": 1, "up": 0, "lft": 0, "dir": 0, "dph": 0,
 }
 
 # Every key an S7 "stretchy sprite" entry carries besides ID/xx/yy/dir/spr/
