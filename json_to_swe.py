@@ -23,7 +23,11 @@ Each world is a dict of sections:
     S2  ground/terrain tiles      {xx, yy, i}
     S3  decorations               {xx, yy, i, ID, spr}      (left empty here)
     S4  objects / enemies         {xx, yy, ID, scl, dir, ...many flags}
-    S5  S6  S7  S8                other categories           (left empty here)
+    S5  pipes                     {xx, yy, dir, sz, xscl, yscl, ...}
+    S6  "obj_cannon_res" entries  Cannon: {xx, yy, dir, rht, dwn, up, lft}
+    S7  "stretchy sprite" objects Bullet Bill Blaster / Semisolid Platform:
+                                   {xx, yy, dir, spr, wth, hht, dph, ...}
+    S8                             (left empty here)
 
 An unused subworld is written as SB1 = {"S1": []}, matching the editor.
 
@@ -41,6 +45,10 @@ boundaries   pixels (16 / tile), top=432
 The playfield is 27 tiles (432 px) tall, so a tile at row `r` (from the
 bottom) maps to swe_yy = (27 - 1 - r) * 16. Object columns use the viewer's
 formula  col = x//160 - w//2 ,  rows  row = y//160  (see mm2_viewer_json.py).
+OBJ_LEFT_ANCHOR_IDS use  col = x//160  (no -w//2) instead. For
+OBJ_H_ANCHOR_TOP_IDS, row is additionally shifted up by (h-1) tiles, since
+their SWE sprite sits at the top of the object's h-tall MM2 footprint, not
+its bottom row.
 
 Lossy / best-effort
 -------------------
@@ -54,6 +62,13 @@ This is a "best effort" conversion, not a perfect round trip:
     (obj_*_res). OBJ_ID_MAP covers the objects SMMWE actually has; anything
     SMMWE lacks (clear pipes, snake/track blocks, most koopalings, tree,
     crate, ...) is dropped with a warning.
+  * Bullet Bill Blaster (13), Semisolid Platform (16) and Cannon (47) are
+    NOT S4 objects in SMMWE -- they're emitted to S6/S7 by build_cannons /
+    build_platform_objects. Confusingly, SMMWE's internal names are swapped
+    relative to MM2: the Cannon is "obj_cannon_res" (S6) and the Bullet Bill
+    Blaster is "obj_bullebill_base_res" (S7), verified in-game against
+    hand-placed reference saves. The Cannon's S6 entry has no size field, so
+    its MM2 `h` is lost.
   * Object flags. MM2 packs orientation/wings/parachute/etc. into `flag` /
     `cflag` bitfields whose per-object meaning isn't fully documented. We
     emit the SWE flag fields as 0 (default) and only set scl / a best-effort
@@ -152,10 +167,10 @@ OBJ_ID_MAP = {
     10:  "obj_spring_res",          # Spring / Trampoline
     11:  "obj_platform_res",        # Lift (approx)
     12:  "obj_thwomp_res",          # Thwomp
-    13:  "obj_bullebill_base_res",  # Bullet Bill Blaster
+    # 13 Bullet Bill Blaster -> S7 "obj_bullebill_base_res", see build_platform_objects
     14:  "obj_mushroom_platform_res",  # Mushroom Platform
     15:  "obj_bobomb_res",          # Bob-omb
-    16:  "obj_platform_res",        # Semisolid Platform (approx)
+    # 16 Semisolid Platform -> S7 "obj_semisolid_platform1", see build_platform_objects
     17:  "obj_puente_res",          # Bridge
     18:  "obj_pswitch_res",         # P Switch
     19:  "obj_pow_res",             # POW Block
@@ -186,7 +201,7 @@ OBJ_ID_MAP = {
     44:  "obj_mushroom_res",        # Big Mushroom (approx; see scl)
     45:  None,                      # Goomba's Shoe (no SMMWE equiv)
     46:  "obj_drybones_res",        # Dry Bones
-    47:  "obj_cannon_res",          # Cannon
+    # 47 Cannon -> S6 "obj_cannon_res", see build_cannons
     48:  "obj_blooper_res",         # Blooper
     49:  "obj_puente_res",          # Castle Bridge (approx)
     50:  "obj_spring_res",          # Jumping Machine (approx)
@@ -304,6 +319,26 @@ OBJ_Y_OFFSET_PX = {
     70: PX,   # Big Coin (10-coin) -> obj_coin10_res
 }
 
+# MM2 object ids whose SWE counterpart anchors its sprite at the LEFT edge of
+# the MM2 footprint (col = x // SUBPX), matching _LEFT_ANCHOR in
+# mm2_viewer_json.py, instead of the generic centered formula
+# col = x // SUBPX - w // 2.
+OBJ_LEFT_ANCHOR_IDS = {14, 16, 71}  # Mushroom / Semisolid / Half-Collision Platform
+
+# MM2 object ids whose `h` (tile height, growing UP from the (x,y) anchor at
+# the bottom row) is not represented by a stretched SWE sprite -- instead the
+# single SWE sprite sits at the TOP of that h-tall span. Without this, these
+# objects are placed on the object's bottom row, which for most level designs
+# is the ground row and hides the sprite behind/under terrain ("doesn't show
+# up at all"). yy is shifted up by (h-1) tiles to compensate. Verified exactly
+# against toost's drawing_instructions for Bullet Bill Blaster (id 13: h=2/5/7
+# all match (h-1)*PX precisely); applied to Mushroom Platform / Banzai Bill /
+# Half-Collision Platform as a best-effort extrapolation (not independently
+# verified). Bullet Bill Blaster / Semisolid Platform / Cannon (13/16/47) are
+# no longer routed through this S4 path -- see build_cannons /
+# build_platform_objects, which apply the same (h-1)*PX shift directly.
+OBJ_H_ANCHOR_TOP_IDS = {14, 32, 71}
+
 # Every key an S4 object dict carries (from a real .swe). All flags default to
 # 0; we only fill ID / xx / yy / scl / dir.
 S4_TEMPLATE = {
@@ -312,6 +347,69 @@ S4_TEMPLATE = {
     "can_complement": 0, "parachute": 0, "progress": 0, "sierra": 0,
     "bumper": 0, "inup": 0, "ice": 0,
 }
+
+# Every key an S6 Cannon ("obj_cannon_res") entry carries, from a hand-placed
+# reference save. rht/dwn/up/lft/dir are direction-related flags whose
+# per-direction meaning isn't reverse-engineered yet; the reference (default
+# placement) had dwn=1 and everything else 0, used as a constant.
+S6_CANNON_TEMPLATE = {
+    "rht": 0, "dwn": 1, "up": 0, "lft": 0, "dir": 0,
+}
+
+# Every key an S7 "stretchy sprite" entry carries besides ID/xx/yy/dir/spr/
+# wth/hht/dph, from a hand-placed reference save. All state flags default to 0
+# (contents/effects like fire/ice/wings/parachute aren't carried over).
+S7_TEMPLATE = {
+    "air": 0, "pinkcoin": 0, "clr": 0, "fire": 0, "key": 0, "rock": 0,
+    "energy": 0, "wings": 0, "parachute": 0, "ice": 0,
+}
+
+# MM2 object id -> S7 "ID" string for the platform-family stretchy sprites.
+# See build_platform_objects for the wth/hht/dph formulas. SMMWE's naming
+# swaps 13 <-> 47 relative to MM2: the Bullet Bill Blaster (13) is
+# "obj_bullebill_base_res" and the Cannon (47) is "obj_cannon_res" (in S6,
+# see build_cannons / S6_CANNON_TEMPLATE) -- verified in-game.
+PLATFORM_S7_IDS = {
+    16: "obj_semisolid_platform1",   # Semisolid Platform
+    13: "obj_bullebill_base_res",    # Bullet Bill Blaster
+}
+
+# SWE gamestyle int (see GAMESTYLE_MAP) -> sprite-name prefix used by the S7
+# "ssp1"/"bullebill_base" sprites. SMW (2) sprites have no prefix.
+GAMESTYLE_SPR_PREFIX = {0: "SMB", 1: "SMB3", 2: "", 3: "NSMBU"}
+
+# THEME_MAP theme names for which a `spr_<prefix>_ssp1_<theme>` sprite exists,
+# per gamestyle prefix (reverse-engineered from data.win's string table).
+# Themes not listed fall back to "overworld". Night variants are not used
+# (best-effort: a level converted at night gets the day sprite).
+SSP1_THEMES = {
+    "SMB":   {"airship", "castle", "desert", "ghost", "overworld", "snow",
+              "underground", "underwater"},
+    "SMB3":  {"airship", "castle", "desert", "forest", "ghost", "overworld",
+              "sky", "snow", "underground", "underwater"},
+    "":      {"airship", "castle", "desert", "forest", "ghost", "overworld",
+              "snow", "underground", "underwater"},
+    "NSMBU": {"airship", "castle", "desert", "forest", "ghost", "overworld",
+              "sky", "snow", "underground", "underwater"},
+}
+
+
+def ssp_sprite_name(gamestyle, theme):
+    """Semisolid Platform sprite name for a given SWE gamestyle/theme."""
+    prefix = GAMESTYLE_SPR_PREFIX.get(gamestyle, "NSMBU")
+    valid = SSP1_THEMES.get(prefix, SSP1_THEMES["NSMBU"])
+    t = theme if theme in valid else "overworld"
+    return f"spr_{prefix}_ssp1_{t}" if prefix else f"spr_ssp1_{t}"
+
+
+def bullebill_sprite_name(gamestyle):
+    """Bullet Bill Blaster ("obj_bullebill_base_res") sprite name for a SWE
+    gamestyle. This sprite has no theme variants (only SMB3/NSMBU have a
+    dedicated sprite; SMB1/SMW share the unprefixed default)."""
+    prefix = GAMESTYLE_SPR_PREFIX.get(gamestyle, "NSMBU")
+    if prefix in ("SMB3", "NSMBU"):
+        return f"spr_{prefix}_bullebill_base"
+    return "spr_bullebill_base"
 
 
 # ---------------------------------------------------------------------------
@@ -335,11 +433,44 @@ def marker_yy(tile_y):
 
 def object_cell(o):
     """Return (col, row_from_bottom) for an MM2 object, matching the viewer's
-    formula:  col = x//160 - w//2 ,  row = y//160 ."""
+    formula:  col = x//160 - w//2 ,  row = y//160 -- except for
+    OBJ_LEFT_ANCHOR_IDS, which use  col = x//160  (no -w//2), matching
+    _LEFT_ANCHOR in mm2_viewer_json.py."""
     w = max(1, o.get("w", 1))
-    col = o["x"] // SUBPX - w // 2
+    if o.get("id") in OBJ_LEFT_ANCHOR_IDS:
+        col = o["x"] // SUBPX
+    else:
+        col = o["x"] // SUBPX - w // 2
     row = o["y"] // SUBPX
     return col, row
+
+
+# Object ids whose rectangular w x h bounding box does not represent a solid
+# wall/ceiling/floor -- excluded from occupied_cells so they don't create
+# false "solid" terrain signals for build_cannons.
+_NON_SOLID_IDS = {
+    87,  # Slight Slope -- diagonal, not a solid rectangle
+    88,  # Steep Slope -- diagonal, not a solid rectangle
+    16,  # Semisolid Platform -- walk-through from below/sides
+}
+
+
+def occupied_cells(j, *, exclude_id=None):
+    """Set of (col, row_from_bottom) tile cells covered by S2 ground terrain
+    or by any object's footprint (other than `exclude_id`). Used by
+    build_cannons to detect adjacent floor/ceiling/wall terrain."""
+    occ = {(g["x"], g["y"]) for g in j.get("ground", [])}
+    for o in j.get("objects", []):
+        oid = o.get("id")
+        if oid == exclude_id or oid in _NON_SOLID_IDS:
+            continue
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        col, row = object_cell(o)
+        for dx in range(w):
+            for dy in range(h):
+                occ.add((col + dx, row + dy))
+    return occ
 
 
 # ---------------------------------------------------------------------------
@@ -432,14 +563,20 @@ def build_pipes(objects):
     return out
 
 
+# MM2 object ids handled by dedicated builders, not the generic S4 path.
+_NON_S4_IDS = {9, 13, 16, 47}  # 9=Pipe (S5), 13/16/47 -> S6/S7 (see below)
+
+
 def build_objects(objects):
     """MM2 objects[] -> SWE S4. Returns (s4_list, dropped_counts).
-    Pipes (id 9) are handled separately by build_pipes and skipped here."""
+    Pipes (id 9) and the S6/S7 special cases (13/16/47) are handled by
+    build_pipes / build_cannons / build_platform_objects and
+    skipped here."""
     out = []
     dropped = {}
     for o in objects:
         oid = o.get("id")
-        if oid == 9:
+        if oid in _NON_S4_IDS:
             continue
         swe_id = OBJ_ID_MAP.get(oid)
         if swe_id is None:
@@ -449,16 +586,134 @@ def build_objects(objects):
         col, row = object_cell(o)
         # Big variants (Big Mushroom etc.) -> scale 2, everything else 1.
         scl = 2 if oid == 44 else 1
+        yy = (FIELD_HEIGHT_TILES - 1 - row) * PX - OBJ_Y_OFFSET_PX.get(oid, 0)
+        if oid in OBJ_H_ANCHOR_TOP_IDS:
+            h = max(1, o.get("h", 1))
+            yy -= (h - 1) * PX
         entry = dict(S4_TEMPLATE)
         entry.update({
             "ID": swe_id,
             "xx": col * PX,
-            "yy": (FIELD_HEIGHT_TILES - 1 - row) * PX - OBJ_Y_OFFSET_PX.get(oid, 0),
+            "yy": yy,
             "scl": scl,
             "dir": 0,   # best-effort: MM2 flag bitfields aren't carried over
         })
         out.append(entry)
     return out, dropped
+
+
+def build_cannons(objects, occ):
+    """MM2 Cannon (id 47) -> SWE S6 "obj_cannon_res" entries.
+
+    Position uses the same centered-column / top-of-footprint formula as
+    build_objects' OBJ_H_ANCHOR_TOP_IDS path. The S6 entry has no size
+    field, so MM2's `h` cannot be represented and is dropped.
+
+    up/dwn/dir are not stored in MM2's `flag` in a reverse-engineered form,
+    so they're inferred from adjacent terrain/objects in `occ` (see
+    occupied_cells), verified against the 21 cannons in a real level:
+
+      * A solid cell directly above the footprint means the cannon is
+        ceiling-mounted (up=1, dwn=0).
+      * A ceiling-mounted cannon with open space directly below shoots
+        straight down (dir=6) -- this is the common "turret in an open
+        room" case (confirmed: 3 single-tile + 1 big ceiling cannon in an
+        open alcove all shoot down, regardless of side walls).
+      * A ceiling-mounted cannon with something solid directly below (e.g.
+        embedded in the face of a pillar) instead faces away from an
+        adjacent side wall (dir=0 right / dir=4 left).
+      * Everything else is floor-mounted, facing right (dwn=1, dir=0) --
+        side-wall-based left/right facing for floor cannons was tried and
+        produced a false positive, so floor cannons always face right.
+
+    A floor-mounted "big" (h>1) cannon's MM2 bounding box is embedded in
+    the ground it's mounted on -- only the row above the box (row+h, the
+    same row the ceiling-check above confirms is open) is clear, so that's
+    where the single S6 tile is placed; h==1 cannons keep the existing
+    top-of-footprint placement (row+h-1 == row).
+
+    `flag` bit 26 (1<<26) is set on every cannon whose dir mapping above
+    matches the reference saves; the one cannon missing it renders with
+    left/right swapped, so dir 0/4 are flipped when that bit is absent.
+
+    rht/lft are always 0, per the reference save."""
+    HFLIP_DIR = {0: 4, 4: 0}
+    out = []
+    for o in objects:
+        if o.get("id") != 47:
+            continue
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        col, row = object_cell(o)
+
+        ceiling = any((col + dx, row + h) in occ for dx in range(w))
+        if ceiling:
+            up, dwn = 1, 0
+            below_open = not any((col + dx, row - 1) in occ for dx in range(w))
+            if below_open:
+                cannon_dir = 6
+            else:
+                wall_left = any((col - 1, row + dy) in occ for dy in range(h))
+                wall_right = any((col + w, row + dy) in occ for dy in range(h))
+                cannon_dir = 4 if (wall_right and not wall_left) else 0
+            top_row = row + h - 1
+        else:
+            up, dwn = 0, 1
+            cannon_dir = 0
+            top_row = row + h if h > 1 else row
+
+        if not (o.get("flag", 0) & (1 << 26)):
+            cannon_dir = HFLIP_DIR.get(cannon_dir, cannon_dir)
+
+        entry = dict(S6_CANNON_TEMPLATE)
+        entry.update({
+            "ID": "obj_cannon_res",
+            "xx": col * PX,
+            "yy": ground_yy(top_row),
+            "up": up,
+            "dwn": dwn,
+            "dir": cannon_dir,
+        })
+        out.append(entry)
+    return out
+
+
+def build_platform_objects(objects, *, gamestyle, theme):
+    """MM2 Bullet Bill Blaster (13) / Semisolid Platform (16) -> SWE S7
+    entries.
+
+    S7 is a "stretchy sprite" object: `spr` selects the themed sprite and
+    `wth`/`hht` size it (in MM2 tile units). Position reuses the
+    centered/left-anchor + top-of-footprint formula from object_cell /
+    OBJ_H_ANCHOR_TOP_IDS. wth/hht = w,h directly -- verified against two
+    8-entry hand-placed reference grids (a "staircase" of 3x3/3x4/3x5/3x6
+    and a "different width" set of 3x3/4x3/5x3/6x3 Semisolid Platforms),
+    which gave wth==w and hht==h exactly in all 8 cases. `dph` doesn't
+    appear to affect rendering and is left at the constant from the
+    original single-object reference of each type (255 / 0).
+    """
+    out = []
+    for o in objects:
+        oid = o.get("id")
+        if oid not in PLATFORM_S7_IDS:
+            continue
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        col, row = object_cell(o)
+        entry = dict(S7_TEMPLATE)
+        entry.update({
+            "ID": PLATFORM_S7_IDS[oid],
+            "xx": col * PX,
+            "yy": ground_yy(row) - (h - 1) * PX,
+            "dir": 0,
+            "wth": w, "hht": h,
+        })
+        if oid == 16:
+            entry.update({"spr": ssp_sprite_name(gamestyle, theme), "dph": 255})
+        else:  # 13
+            entry.update({"spr": bullebill_sprite_name(gamestyle), "dph": 0})
+        out.append(entry)
+    return out
 
 
 def build_metadata(j, *, user, name, desc, date_str, time_str):
@@ -521,8 +776,13 @@ def build_metadata(j, *, user, name, desc, date_str, time_str):
 def build_world(j, *, user, name, desc, date_str, time_str):
     """Build a full SWE world dict (S0 or a populated SB1) from one map JSON."""
     objects = j.get("objects", [])
+    gamestyle = GAMESTYLE_MAP.get(j.get("gamestyle_raw", 0), 3)
+    theme = THEME_MAP.get(j.get("theme_raw", 0), "overworld")
     s4, dropped = build_objects(objects)
     s5 = build_pipes(objects)
+    occ = occupied_cells(j, exclude_id=47)
+    s6 = build_cannons(objects, occ)
+    s7 = build_platform_objects(objects, gamestyle=gamestyle, theme=theme)
 
     world = {
         "S1": [build_metadata(j, user=user, name=name, desc=desc,
@@ -531,8 +791,8 @@ def build_world(j, *, user, name, desc, date_str, time_str):
         "S3": [],
         "S4": s4,
         "S5": s5,
-        "S6": [],
-        "S7": [],
+        "S6": s6,
+        "S7": s7,
         "S8": [],
     }
     return world, dropped
@@ -631,6 +891,8 @@ def main():
     print(f"  ground tiles : {len(s0['S2'])}")
     print(f"  objects      : {len(s0['S4'])}")
     print(f"  pipes        : {len(s0['S5'])}")
+    print(f"  cannons      : {len(s0['S6'])}")
+    print(f"  platforms    : {len(s0['S7'])}")
     if dropped:
         total = sum(dropped.values())
         print(f"  dropped {total} object(s) with no SMMWE equivalent:")
