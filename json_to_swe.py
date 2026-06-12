@@ -73,7 +73,9 @@ This is a "best effort" conversion, not a perfect round trip:
     `cflag` bitfields whose per-object meaning isn't fully documented. We
     emit the SWE flag fields as 0 (default) and only set scl / a best-effort
     direction. Wings, parachutes, etc. are not carried over.
-  * Decorations (S3) and the slope/track object families are not emitted.
+  * Decorations (S3) and the track object families are not emitted. Slight/
+    Steep Slopes (87/88) have no diagonal SWE equivalent, so their full
+    w x h bounding box is filled in as solid S2 ground instead.
 
 Usage
 -----
@@ -165,7 +167,7 @@ OBJ_ID_MAP = {
     8:   "obj_coin_res",            # Coin
     9:   None,                      # Pipe -> emitted to S5 (see build_pipes)
     10:  "obj_spring_res",          # Spring / Trampoline
-    11:  "obj_platform_res",        # Lift (approx)
+    # 11 Lift -> S7 "obj_platform_res", see build_platform_objects
     12:  "obj_thwomp_res",          # Thwomp
     # 13 Bullet Bill Blaster -> S7 "obj_bullebill_base_res", see build_platform_objects
     14:  "obj_mushroom_platform_res",  # Mushroom Platform
@@ -194,7 +196,7 @@ OBJ_ID_MAP = {
     37:  None,                      # Starting Brick (editor marker)
     38:  "obj_arrow_res",           # Starting Arrow
     39:  "obj_magikoopa_res",       # Magikoopa
-    40:  "obj_spike_res",           # Spike Top (approx)
+    40:  "obj_spiny_res",           # Spike Top -> Spiny (approx)
     41:  "obj_boo_res",             # Boo
     42:  "obj_clown_res",           # Clown Car
     43:  "obj_pinchos_res",         # Spike Trap
@@ -245,7 +247,9 @@ OBJ_ID_MAP = {
     88:  None,                      # Steep Slope (terrain)
     89:  None,                      # Reel Camera (cutscene marker)
     90:  "obj_checkpoint_res",      # Checkpoint Flag
-    91:  "obj_seesaw_res",          # Seesaw
+    # 91 Seesaw -> S7 stretchy "obj_seesaw_res", sized to the seesaw's
+    # footprint, see PLATFORM_S7_IDS / build_platform_objects
+    91:  None,
     92:  "obj_pink_coin_res",       # Red Coin (approx -> pink coin)
     93:  None,                      # Clear Pipe
     94:  "obj_cinta_res",           # Conveyor Belt
@@ -257,7 +261,7 @@ OBJ_ID_MAP = {
     100: None,                      # Dotted-Line Block
     101: None,                      # Water Marker (liquid is in S1 wl)
     102: "obj_monty_res",           # Monty Mole
-    103: "obj_fishbone_res",        # Fish Bone
+    103: "obj_cheepcheep_res",      # Fish Bone -> Cheep Cheep (approx)
     104: "obj_angrysun_res",        # Angry Sun
     105: "obj_claw_res",            # Swinging Claw
     106: None,                      # Tree (decoration)
@@ -372,6 +376,8 @@ S7_TEMPLATE = {
 PLATFORM_S7_IDS = {
     16: "obj_semisolid_platform1",   # Semisolid Platform
     13: "obj_bullebill_base_res",    # Bullet Bill Blaster
+    91: "obj_platform_res",          # Seesaw -> sized moving platform
+    11: "obj_platform_res",          # Lift -> moving platform
 }
 
 # SWE gamestyle int (see GAMESTYLE_MAP) -> sprite-name prefix used by the S7
@@ -410,6 +416,15 @@ def bullebill_sprite_name(gamestyle):
     if prefix in ("SMB3", "NSMBU"):
         return f"spr_{prefix}_bullebill_base"
     return "spr_bullebill_base"
+
+
+def platform_sprite_name(gamestyle):
+    """Moving platform ("obj_platform_res") sprite name for a SWE gamestyle.
+    Confirmed for SMB1 (prefix "SMB") via a hand-placed reference save
+    ("spr_SMB_platform"); other gamestyles follow the same
+    spr_<prefix>_platform pattern, with SMW (no prefix) using "spr_platform"."""
+    prefix = GAMESTYLE_SPR_PREFIX.get(gamestyle, "NSMBU")
+    return f"spr_{prefix}_platform" if prefix else "spr_platform"
 
 
 # ---------------------------------------------------------------------------
@@ -455,11 +470,14 @@ _NON_SOLID_IDS = {
 }
 
 
-def occupied_cells(j, *, exclude_id=None):
+def occupied_cells(j, *, exclude_id=None, extra_ground=None):
     """Set of (col, row_from_bottom) tile cells covered by S2 ground terrain
-    or by any object's footprint (other than `exclude_id`). Used by
+    or by any object's footprint (other than `exclude_id`), plus any cells in
+    `extra_ground` (e.g. slope footprints filled in by build_world). Used by
     build_cannons to detect adjacent floor/ceiling/wall terrain."""
     occ = {(g["x"], g["y"]) for g in j.get("ground", [])}
+    if extra_ground:
+        occ |= extra_ground
     for o in j.get("objects", []):
         oid = o.get("id")
         if oid == exclude_id or oid in _NON_SOLID_IDS:
@@ -471,6 +489,52 @@ def occupied_cells(j, *, exclude_id=None):
             for dy in range(h):
                 occ.add((col + dx, row + dy))
     return occ
+
+
+# MM2 object ids for slope terrain, which SWE has no diagonal equivalent for.
+# build_world fills these as a solid ascending/descending staircase of S2
+# ground instead of dropping them. Value is the slope's "run" per 1-tile
+# rise: Steep Slope (88) rises 1 tile per column (slope 1), Slight Slope (87)
+# rises 1 tile per 2 columns (slope 1/2).
+_SLOPE_STEPS = {88: 1, 87: 2}
+_SLOPE_IDS = set(_SLOPE_STEPS)
+
+
+def slope_fill_cells(objects):
+    """Set of (col, row_from_bottom) ground cells forming a staircase for
+    every Slight/Steep Slope (87/88) object, to be merged into S2 ground.
+
+    Every one of the object's w columns gets a step of height
+    min(ceil(run/step), h) tiles (run = 1..w from the low end), filled from
+    the object's base row upward -- a "slope of 1" (steep, step=1) or "slope
+    of 1/2" (slight, step=2) staircase capped at the slope's own height h, so
+    the last two columns at the high end both sit flush at height h. flag &
+    0x100000 flips which end (left/right) is the low end, matching
+    slope_tiles() in mm2_viewer_json.py.
+
+    Verified against 3000065_1_overworld.json: with no x/y adjustment, this
+    exactly fills the ground tiles that Goombas standing at the low end, the
+    seam between two chained ascending slopes, and the peak all stand on.
+
+    Slopes anchor at their LEFT edge (col = x // SUBPX, no -w//2), per
+    obj_anchor() in mm2_viewer_json.py.
+    """
+    cells = set()
+    for o in objects:
+        step = _SLOPE_STEPS.get(o.get("id"))
+        if step is None:
+            continue
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        base_col = o["x"] // SUBPX
+        base_row = o["y"] // SUBPX
+        descending = (o.get("flag", 0) & 0x100000) != 0
+        for x in range(w):
+            run = (w - x) if descending else (x + 1)
+            height = min((run + step - 1) // step, h)  # ceil(run/step), capped at h
+            for y in range(height):
+                cells.add((base_col + x, base_row + y))
+    return cells
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +628,7 @@ def build_pipes(objects):
 
 
 # MM2 object ids handled by dedicated builders, not the generic S4 path.
-_NON_S4_IDS = {9, 13, 16, 47}  # 9=Pipe (S5), 13/16/47 -> S6/S7 (see below)
+_NON_S4_IDS = {9, 11, 13, 16, 47, 91}  # 9=Pipe (S5), 11/13/16/47/91 -> S6/S7 (see below)
 
 
 def build_objects(objects):
@@ -576,7 +640,7 @@ def build_objects(objects):
     dropped = {}
     for o in objects:
         oid = o.get("id")
-        if oid in _NON_S4_IDS:
+        if oid in _NON_S4_IDS or oid in _SLOPE_IDS:
             continue
         swe_id = OBJ_ID_MAP.get(oid)
         if swe_id is None:
@@ -679,8 +743,8 @@ def build_cannons(objects, occ):
 
 
 def build_platform_objects(objects, *, gamestyle, theme):
-    """MM2 Bullet Bill Blaster (13) / Semisolid Platform (16) -> SWE S7
-    entries.
+    """MM2 Bullet Bill Blaster (13) / Semisolid Platform (16) / Seesaw (91)
+    -> SWE S7 entries.
 
     S7 is a "stretchy sprite" object: `spr` selects the themed sprite and
     `wth`/`hht` size it (in MM2 tile units). Position reuses the
@@ -691,6 +755,22 @@ def build_platform_objects(objects, *, gamestyle, theme):
     which gave wth==w and hht==h exactly in all 8 cases. `dph` doesn't
     appear to affect rendering and is left at the constant from the
     original single-object reference of each type (255 / 0).
+
+    Seesaw (91) and Lift (11) both use "obj_platform_res" (a vertically-
+    moving platform). Seesaw was verified via a hand-placed reference save
+    ("platform example.swe") containing wth=4/6/8 examples:
+    spr="spr_<gamestyle>_platform", dph=-1, dir=2, hht=3 (constant, the
+    sprite's fixed vertical travel height, independent of the seesaw's h).
+    wth = max(4, w) -- the seesaw's width, with a minimum of 4 (per the
+    reference's "default" size) -- giving a best-effort "platform as big as
+    the seesaw, that goes up and down".
+
+    Lift's S4 mapping to the same "obj_platform_res" ID was missing the
+    dph/wth/hht/spr fields obj_platform_res requires, crashing
+    instance_create_depth on entering play mode ("argument 2 ... expecting a
+    Number") in any level containing a Lift. Routed here with the same
+    dph=-1/dir=2/spr as the (working) seesaw mapping, but hht=1 to match
+    Lift's actual h=1 footprint (seesaw's hht=3 was seesaw-specific).
     """
     out = []
     for o in objects:
@@ -700,18 +780,29 @@ def build_platform_objects(objects, *, gamestyle, theme):
         w = max(1, o.get("w", 1))
         h = max(1, o.get("h", 1))
         col, row = object_cell(o)
+        if oid == 91:
+            wth, hht = max(4, w), 3
+        elif oid == 11:
+            wth, hht = max(4, w), 1
+        else:
+            wth, hht = w, h
+        yy = ground_yy(row) - (hht - 1) * PX
+        if oid == 91:
+            yy += 2 * PX  # nudge the seesaw replacement down 2 tiles
         entry = dict(S7_TEMPLATE)
         entry.update({
             "ID": PLATFORM_S7_IDS[oid],
             "xx": col * PX,
-            "yy": ground_yy(row) - (h - 1) * PX,
+            "yy": yy,
             "dir": 0,
-            "wth": w, "hht": h,
+            "wth": wth, "hht": hht,
         })
         if oid == 16:
             entry.update({"spr": ssp_sprite_name(gamestyle, theme), "dph": 255})
-        else:  # 13
+        elif oid == 13:
             entry.update({"spr": bullebill_sprite_name(gamestyle), "dph": 0})
+        else:  # 91 (Seesaw) / 11 (Lift) -- moving platform
+            entry.update({"spr": platform_sprite_name(gamestyle), "dph": -1, "dir": 2})
         out.append(entry)
     return out
 
@@ -780,14 +871,24 @@ def build_world(j, *, user, name, desc, date_str, time_str):
     theme = THEME_MAP.get(j.get("theme_raw", 0), "overworld")
     s4, dropped = build_objects(objects)
     s5 = build_pipes(objects)
-    occ = occupied_cells(j, exclude_id=47)
+
+    # Slopes have no SWE equivalent -- fill their footprint in as solid ground.
+    slope_cells = slope_fill_cells(objects)
+    ground = list(j.get("ground", []))
+    existing_ground = {(g["x"], g["y"]) for g in ground}
+    for x, y in slope_cells:
+        if (x, y) not in existing_ground:
+            ground.append({"x": x, "y": y})
+            existing_ground.add((x, y))
+
+    occ = occupied_cells(j, exclude_id=47, extra_ground=slope_cells)
     s6 = build_cannons(objects, occ)
     s7 = build_platform_objects(objects, gamestyle=gamestyle, theme=theme)
 
     world = {
         "S1": [build_metadata(j, user=user, name=name, desc=desc,
                               date_str=date_str, time_str=time_str)],
-        "S2": build_ground(j.get("ground", [])),
+        "S2": build_ground(ground),
         "S3": [],
         "S4": s4,
         "S5": s5,
@@ -844,7 +945,7 @@ def parse_args():
     )
     p.add_argument("json_path", help="Path to a *_overworld.json (or plain) level JSON")
     p.add_argument("-o", "--output", help="Output .swe path (default: <stem>.swe)")
-    p.add_argument("--user", default="MariOver", help="Author name stored in the level")
+    p.add_argument("--user", default="patwick", help="Author name stored in the level")
     p.add_argument("--name", default=None, help="Level name (default: JSON 'name')")
     p.add_argument("--desc", default=None, help="Description (default: JSON 'description')")
     p.add_argument("--height", type=int, default=FIELD_HEIGHT_TILES,
