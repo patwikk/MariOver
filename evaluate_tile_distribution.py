@@ -249,7 +249,7 @@ def load_captions_from_json(json_path):
 def load_scenes_from_json(json_path):
     """Load scenes from a dataset JSON file: a list of {"scene": [[...]], ...}
     entries, or a list of raw 2D scenes."""
-    with open(json_path, 'r') as f:
+    with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     scenes = []
