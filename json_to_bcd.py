@@ -272,6 +272,33 @@ def _pack_array(items, max_count, size, pack_fn, label):
     return bytes(out)
 
 
+PIPE_OBJ_ID = 9  # level.ksy obj_id enum: "pipe"
+
+# Object ids that are placed as a single 1x1 tile in SMM2 (no in-editor
+# resize handle). A generator emitting one of these with w>1 and/or h>1
+# really means a stack/row of that many individual blocks; see
+# _fix_extended_objects.
+ATOMIC_BLOCK_IDS = {
+    4,    # Block
+    5,    # ? Block
+    6,    # Hard Block
+    21,   # Donut Block
+    23,   # Note Block
+    29,   # Hidden Block
+    63,   # Ice Block
+    79,   # P Block
+    99,   # ON/OFF Block
+    100,  # Dotted-Line Block
+    108,  # Blinking Block
+    110,  # Spike Block
+}
+
+
+def _snap_to_tile_anchor(value, offset=80, tile=160):
+    """Round `value` to the nearest grid position satisfying value % tile == offset."""
+    return (value - offset + tile // 2) // tile * tile + offset
+
+
 def _fix_object_anchors(objects, label="map"):
     """Real .bcd objects store x/y as the CENTER of their tile footprint:
         x = (left_col + w/2) * 160   (x % 160 == 80 for odd w, == 0 for even w)
@@ -287,14 +314,29 @@ def _fix_object_anchors(objects, label="map"):
 
     Detect the naive X convention from odd-width objects (where naive vs.
     real differ mod 160) and correct both axes.
+
+    Pipes (id 9) are excluded from the above: they're left-anchored
+    (x = left_col*160 + 80, regardless of width) rather than center-of-span,
+    so the odd-width naive/real shift doesn't apply to them. Generated pipes
+    often land at arbitrary, non-grid-aligned x/y ("floating" mid-tile);
+    force-snap both axes onto the nearest valid tile anchor instead.
     """
-    odd_w = [o for o in objects if o.get("w", 1) % 2 == 1]
+    odd_w = [o for o in objects if o.get("id") != PIPE_OBJ_ID and o.get("w", 1) % 2 == 1]
     x_naive = bool(odd_w) and sum(1 for o in odd_w if o.get("x", 0) % 160 == 0) > len(odd_w) // 2
 
     fixed = []
-    n_x = n_y = 0
+    n_x = n_y = n_pipe = 0
     for o in objects:
         o = dict(o)
+        if o.get("id") == PIPE_OBJ_ID:
+            new_x = _snap_to_tile_anchor(o.get("x", 0))
+            new_y = _snap_to_tile_anchor(o.get("y", 0))
+            if new_x != o.get("x", 0) or new_y != o.get("y", 0):
+                o["x"], o["y"] = new_x, new_y
+                n_pipe += 1
+            fixed.append(o)
+            continue
+
         if x_naive:
             o["x"] = o.get("x", 0) + o.get("w", 1) * 80
             n_x += 1
@@ -303,14 +345,56 @@ def _fix_object_anchors(objects, label="map"):
             n_y += 1
         fixed.append(o)
 
-    if n_x or n_y:
-        print(f"  [{label}] toost-anchor fix: shifted {n_x} object(s) on X, "
-              f"{n_y} object(s) on Y onto toost's tile-center grid")
+    if n_x or n_y or n_pipe:
+        msg = (f"  [{label}] toost-anchor fix: shifted {n_x} object(s) on X, "
+               f"{n_y} object(s) on Y onto toost's tile-center grid")
+        if n_pipe:
+            msg += f"; snapped {n_pipe} pipe(s) onto the tile grid"
+        print(msg)
+    return fixed
+
+
+def _fix_extended_objects(objects, label="map"):
+    """Split any ATOMIC_BLOCK_IDS object with w>1 and/or h>1 into a grid of
+    1x1 objects of the same id, one per tile of its footprint.
+
+    Some generators emit e.g. a single Hard Block object with w=1, h=4
+    instead of 4 separate 1x1 Hard Blocks stacked vertically. toost then
+    draws ONE sprite stretched over the whole footprint ("extended") instead
+    of a stack of distinct blocks. Assumes x/y have already been normalized
+    by _fix_object_anchors (x = (left_col + w/2)*160, y = bottom_row*160+80).
+    """
+    fixed = []
+    n_split = n_total = 0
+    for o in objects:
+        w = o.get("w", 1) or 1
+        h = o.get("h", 1) or 1
+        if o.get("id") not in ATOMIC_BLOCK_IDS or (w <= 1 and h <= 1):
+            fixed.append(o)
+            continue
+
+        left_col = o.get("x", 0) // 160 - w // 2
+        bottom_row = o.get("y", 0) // 160
+        for dx in range(w):
+            for dy in range(h):
+                tile = dict(o)
+                tile["w"] = 1
+                tile["h"] = 1
+                tile["x"] = (left_col + dx) * 160 + 80
+                tile["y"] = (bottom_row + dy) * 160 + 80
+                fixed.append(tile)
+        n_split += 1
+        n_total += w * h
+
+    if n_split:
+        print(f"  [{label}] extended-object fix: split {n_split} object(s) "
+              f"into {n_total} 1x1 tile(s)")
     return fixed
 
 
 def pack_map(j, label="map"):
     objects          = _fix_object_anchors(j.get("objects", []), label)
+    objects          = _fix_extended_objects(objects, label)
     ground           = j.get("ground", [])
     snakes           = j.get("snakes", [])
     clear_pipes      = j.get("clear_pipes", [])
