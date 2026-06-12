@@ -102,6 +102,11 @@ def pack_str_utf16(s, size_bytes):
     return raw.ljust(size_bytes, b"\x00")
 
 
+def _snap_to_tile_anchor(value, offset=80, tile=160):
+    """Round `value` to the nearest grid position satisfying value % tile == offset."""
+    return (value - offset + tile // 2) // tile * tile + offset
+
+
 # ---------------------------------------------------------------------------
 # Level header (512 bytes)
 # ---------------------------------------------------------------------------
@@ -131,6 +136,12 @@ def pack_level_header(j):
         # toost reads a wildly out-of-range goal column and crashes, with
         # or without --toost-compat.)
         goal_x = (goal_x // 160) * 10
+
+    # goal_x should sit on the tile-CENTER grid (goal_x % 10 == 5, i.e.
+    # col*10 + 5), per bcd_levels/json/*_overworld.json. Some generators
+    # land exactly on a tile boundary (goal_x % 10 == 0) instead; snap to
+    # the nearest tile-center column.
+    goal_x = _snap_to_tile_anchor(goal_x, offset=5, tile=10)
 
     fixed = struct.pack(
         "<BBhhhhbbbbBBiiiiiIqi",
@@ -272,7 +283,15 @@ def _pack_array(items, max_count, size, pack_fn, label):
     return bytes(out)
 
 
-PIPE_OBJ_ID = 9  # level.ksy obj_id enum: "pipe"
+# Object ids that are left-anchored (x = left_col*160 + 80, regardless of
+# width) rather than center-of-span. Generated instances of these often land
+# at arbitrary, non-grid-aligned x/y; _fix_object_anchors force-snaps both
+# axes onto the nearest valid tile anchor instead of using the odd-width
+# naive/real shift.
+LEFT_ANCHOR_OBJ_IDS = {
+    9,   # Pipe
+    27,  # Goal
+}
 
 # Object ids that are placed as a single 1x1 tile in SMM2 (no in-editor
 # resize handle). A generator emitting one of these with w>1 and/or h>1
@@ -294,11 +313,6 @@ ATOMIC_BLOCK_IDS = {
 }
 
 
-def _snap_to_tile_anchor(value, offset=80, tile=160):
-    """Round `value` to the nearest grid position satisfying value % tile == offset."""
-    return (value - offset + tile // 2) // tile * tile + offset
-
-
 def _fix_object_anchors(objects, label="map"):
     """Real .bcd objects store x/y as the CENTER of their tile footprint:
         x = (left_col + w/2) * 160   (x % 160 == 80 for odd w, == 0 for even w)
@@ -315,25 +329,25 @@ def _fix_object_anchors(objects, label="map"):
     Detect the naive X convention from odd-width objects (where naive vs.
     real differ mod 160) and correct both axes.
 
-    Pipes (id 9) are excluded from the above: they're left-anchored
-    (x = left_col*160 + 80, regardless of width) rather than center-of-span,
-    so the odd-width naive/real shift doesn't apply to them. Generated pipes
-    often land at arbitrary, non-grid-aligned x/y ("floating" mid-tile);
-    force-snap both axes onto the nearest valid tile anchor instead.
+    LEFT_ANCHOR_OBJ_IDS (Pipe, Goal) are excluded from the above: they're
+    left-anchored rather than center-of-span, so the odd-width naive/real
+    shift doesn't apply to them. Generated instances of these often land at
+    arbitrary, non-grid-aligned x/y ("floating" mid-tile); force-snap both
+    axes onto the nearest valid tile anchor instead.
     """
-    odd_w = [o for o in objects if o.get("id") != PIPE_OBJ_ID and o.get("w", 1) % 2 == 1]
+    odd_w = [o for o in objects if o.get("id") not in LEFT_ANCHOR_OBJ_IDS and o.get("w", 1) % 2 == 1]
     x_naive = bool(odd_w) and sum(1 for o in odd_w if o.get("x", 0) % 160 == 0) > len(odd_w) // 2
 
     fixed = []
-    n_x = n_y = n_pipe = 0
+    n_x = n_y = n_left = 0
     for o in objects:
         o = dict(o)
-        if o.get("id") == PIPE_OBJ_ID:
+        if o.get("id") in LEFT_ANCHOR_OBJ_IDS:
             new_x = _snap_to_tile_anchor(o.get("x", 0))
             new_y = _snap_to_tile_anchor(o.get("y", 0))
             if new_x != o.get("x", 0) or new_y != o.get("y", 0):
                 o["x"], o["y"] = new_x, new_y
-                n_pipe += 1
+                n_left += 1
             fixed.append(o)
             continue
 
@@ -345,11 +359,11 @@ def _fix_object_anchors(objects, label="map"):
             n_y += 1
         fixed.append(o)
 
-    if n_x or n_y or n_pipe:
+    if n_x or n_y or n_left:
         msg = (f"  [{label}] toost-anchor fix: shifted {n_x} object(s) on X, "
                f"{n_y} object(s) on Y onto toost's tile-center grid")
-        if n_pipe:
-            msg += f"; snapped {n_pipe} pipe(s) onto the tile grid"
+        if n_left:
+            msg += f"; snapped {n_left} pipe/goal object(s) onto the tile grid"
         print(msg)
     return fixed
 
