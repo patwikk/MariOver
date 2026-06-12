@@ -97,7 +97,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo === Step 6: Evaluating tile distribution ===
-python evaluate_tile_distribution.py --model_path "%DIFF_OUTPUT%" --num_tiles %NUM_TILES% --tileset %EVAL_TILESET%
+python evaluate_tile_distribution.py --model_path "%DIFF_OUTPUT%" --num_tiles %NUM_TILES% --tileset %EVAL_TILESET% --captions_json datasets\%GAME%_LevelsAndCaptions-%TYPE%.json --seed %SEED%
 if %ERRORLEVEL% neq 0 (
     echo ERROR: evaluate_tile_distribution.py failed.
     exit /b 1
