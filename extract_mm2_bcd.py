@@ -141,6 +141,17 @@ HEADER_SIZE       = 0x10      # 16-byte header we skip / zero-pad
 TRAILER_SIZE      = 0x30      # 48-byte trailer: IV(16) + seed(16) + zeros(16)
 PAYLOAD_SIZE      = COURSE_FILE_SIZE - HEADER_SIZE - TRAILER_SIZE  # 0x5BFC0
 
+# Offset of the gamestyle field (s2le) within the decompressed payload,
+# per level.ksy: sum of the fixed header fields before it (52 bytes) plus
+# the 189-byte unk1 padding = 241.
+GAMESTYLE_OFFSET  = 241
+GAMESTYLE_SM3DW   = 22323   # level.ksy enum gamestyle: sm3dw
+
+
+def get_gamestyle_raw(plaintext: bytes) -> int:
+    """Read the raw gamestyle enum value from a decoded level payload."""
+    return struct.unpack_from("<h", plaintext, GAMESTYLE_OFFSET)[0]
+
 
 def build_bcd(plaintext: bytes) -> bytes:
     """
@@ -209,6 +220,7 @@ def extract_levels(
     data_id_filter=None,
     name_filter=None,
     name_count=None,
+    skip_3dworld: bool = False,
 ):
     from datasets import load_dataset
 
@@ -219,6 +231,7 @@ def extract_levels(
     ds = load_dataset("TheGreatRambler/mm2_level", streaming=streaming, split="train")
 
     saved = skipped = errors = 0
+    skipped_3dw = 0
     name_saved = 0
 
     for row in ds:
@@ -229,9 +242,8 @@ def extract_levels(
         
         if name_filter is not None:
             level_name = str(row.get("name", ""))
-
-        if name_filter.lower() not in level_name.lower():
-            continue
+            if name_filter.lower() not in level_name.lower():
+                continue
 
         raw = row["level_data"]
         if raw is None:
@@ -248,6 +260,11 @@ def extract_levels(
         if len(plaintext) != PAYLOAD_SIZE:
             print(f"  [WARN] data_id={data_id}: unexpected size {len(plaintext)}, skipping")
             errors += 1
+            continue
+
+        if skip_3dworld and get_gamestyle_raw(plaintext) == GAMESTYLE_SM3DW:
+            print(f"  [SKIP] data_id={data_id}: skipped because level is 3D World")
+            skipped_3dw += 1
             continue
 
         try:
@@ -277,7 +294,8 @@ def extract_levels(
             break
 
     print(
-        f"\nDone. Saved: {saved}  |  Skipped (null): {skipped}  |  Errors: {errors}"
+        f"\nDone. Saved: {saved}  |  Skipped (null): {skipped}  |  "
+        f"Skipped (3D World): {skipped_3dw}  |  Errors: {errors}"
     )
     print(f"Output dir: {out.resolve()}")
 
@@ -302,6 +320,8 @@ def parse_args():
                    metavar="DATA_ID", help="Only extract these data_ids")
     p.add_argument("--name", type=str, default=None, help="Extract levels whose name contains this text")
     p.add_argument("--name_count", type=int, default=None, help="Number of matching levels to extract")
+    p.add_argument("--skip_3dworld", action="store_true",
+                   help="Skip levels whose gamestyle is Super Mario 3D World")
     return p.parse_args()
 
 # python extract_mm2_bcd.py --name "mario" --name_count 25
@@ -315,4 +335,5 @@ if __name__ == "__main__":
         data_id_filter=set(args.ids) if args.ids else None,
         name_filter=args.name,
         name_count=args.name_count,
-    )   
+        skip_3dworld=args.skip_3dworld,
+    )
