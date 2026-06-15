@@ -539,8 +539,8 @@ def call_ollama(prompt, model, url, timeout, retries):
         "prompt": prompt,
         "stream": False,
         "options": {
-            "temperature": 0.3,
-            "num_predict": 512,
+            "temperature": 0,
+            "seed": 42
         },
     }).encode("utf-8")
 
