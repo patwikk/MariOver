@@ -170,7 +170,8 @@ OBJ_ID_MAP = {
     # 11 Lift -> S7 "obj_platform_res", see build_platform_objects
     12:  "obj_thwomp_res",          # Thwomp
     # 13 Bullet Bill Blaster -> S7 "obj_bullebill_base_res", see build_platform_objects
-    14:  "obj_mushroom_platform_res",  # Mushroom Platform
+    # 14 Mushroom Platform -> S7 "obj_mushroom_platform_res", see build_platform_objects
+    14:  None,
     15:  "obj_bobomb_res",          # Bob-omb
     # 16 Semisolid Platform -> S7 "obj_semisolid_platform1", see build_platform_objects
     # 17 Bridge -> S7 "obj_puente_res", see build_platform_objects / PLATFORM_S7_IDS
@@ -349,13 +350,14 @@ OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 49, 71}  # Mushroom / Semisolid / Half-Collis
 # is the ground row and hides the sprite behind/under terrain ("doesn't show
 # up at all"). yy is shifted up by (h-1) tiles to compensate. Verified exactly
 # against toost's drawing_instructions for Bullet Bill Blaster (id 13: h=2/5/7
-# all match (h-1)*PX precisely); applied to Mushroom Platform / Banzai Bill /
-# Half-Collision Platform as a best-effort extrapolation (not independently
-# verified). Bullet Bill Blaster / Semisolid Platform / Cannon (13/16/47) are
-# no longer routed through this S4 path -- see build_cannons /
-# build_platform_objects, which apply the same (h-1)*PX shift directly.
+# all match (h-1)*PX precisely); applied to Banzai Bill / Half-Collision
+# Platform as a best-effort extrapolation (not independently verified).
+# Bullet Bill Blaster / Semisolid Platform / Cannon / Mushroom Platform
+# (13/16/47/14) are no longer routed through this S4 path -- see
+# build_cannons / build_platform_objects, which apply the same (h-1)*PX
+# shift directly.
 #
-OBJ_H_ANCHOR_TOP_IDS = {14, 32, 71}
+OBJ_H_ANCHOR_TOP_IDS = {32, 71}
 
 # Every key an S4 object dict carries (from a real .swe). All flags default to
 # 0; we only fill ID / xx / yy / scl / dir.
@@ -409,6 +411,7 @@ PLATFORM_S7_IDS = {
     11: "obj_platform_res",          # Lift -> moving platform
     17: "obj_puente_res",            # Bridge
     49: "obj_puente_res",            # Castle Bridge (approx)
+    14: "obj_mushroom_platform_res", # Mushroom Platform
 }
 
 # obj_puente_res sprite name. From a hand-placed reference save ("bridge
@@ -445,6 +448,17 @@ def ssp_sprite_name(gamestyle, theme):
     valid = SSP1_THEMES.get(prefix, SSP1_THEMES["NSMBU"])
     t = theme if theme in valid else "overworld"
     return f"spr_{prefix}_ssp1_{t}" if prefix else f"spr_ssp1_{t}"
+
+
+def mp1_sprite_name(gamestyle, theme):
+    """Mushroom Platform sprite name for a given SWE gamestyle/theme.
+    Confirmed for NSMBU/ghost ("spr_NSMBU_mp1_ghost") via a hand-placed
+    reference save; other gamestyles/themes follow the ssp1 naming pattern
+    (best-effort, SSP1_THEMES reused since mp1 has no separate theme list)."""
+    prefix = GAMESTYLE_SPR_PREFIX.get(gamestyle, "NSMBU")
+    valid = SSP1_THEMES.get(prefix, SSP1_THEMES["NSMBU"])
+    t = theme if theme in valid else "overworld"
+    return f"spr_{prefix}_mp1_{t}" if prefix else f"spr_mp1_{t}"
 
 
 def bullebill_sprite_name(gamestyle):
@@ -687,7 +701,7 @@ def build_pipes(objects):
 
 
 # MM2 object ids handled by dedicated builders, not the generic S4 path.
-_NON_S4_IDS = {9, 11, 13, 16, 17, 47, 49, 55, 91}  # 9=Pipe (S5), 55=Door (S8), 11/13/16/17/47/49/91 -> S6/S7 (see below)
+_NON_S4_IDS = {9, 11, 13, 14, 16, 17, 47, 49, 55, 91}  # 9=Pipe (S5), 55=Door (S8), 11/13/14/16/17/47/49/91 -> S6/S7 (see below)
 
 
 def build_objects(objects):
@@ -849,7 +863,8 @@ def build_cannons(objects, occ):
 
 def build_platform_objects(objects, *, gamestyle, theme):
     """MM2 Bullet Bill Blaster (13) / Semisolid Platform (16) / Seesaw (91) /
-    Bridge (17) / Castle Bridge (49, approx) -> SWE S7 entries.
+    Bridge (17) / Castle Bridge (49, approx) / Mushroom Platform (14)
+    -> SWE S7 entries.
 
     S7 is a "stretchy sprite" object: `spr` selects the themed sprite and
     `wth`/`hht` size it (in MM2 tile units). Position reuses the
@@ -882,6 +897,16 @@ def build_platform_objects(objects, *, gamestyle, theme):
     enforces a minimum bridge width of 3, matching the reference's
     smallest example); hht=3/dph=8/dir=0/spr=PUENTE_SPRITE are constant,
     verified against all 5 widths (3-7) in "bridge example .swe".
+
+    Mushroom Platform (14) -> "obj_mushroom_platform_res", a single S7
+    entry per platform (the stalk below it is drawn by the sprite itself,
+    not a separate object). Left-anchored, wth=w/hht=h with no yy nudge
+    (the same plain (h-1)*PX-shifted anchor as everything else) -- verified
+    against two 4-entry reference grids ("mushroom platform example diff
+    width/length .swe") spanning w=3-6 and h=3-6: wth==w and hht==h exactly
+    in all 8 cases, and yy matched the unmodified formula assuming all 4
+    platforms in each grid share the same MM2 row. `dph = 245 + hht`
+    (248/249/250/251 for hht=3/4/5/6); `spr` follows mp1_sprite_name.
     """
     out = []
     for o in objects:
@@ -918,6 +943,8 @@ def build_platform_objects(objects, *, gamestyle, theme):
             entry.update({"spr": bullebill_sprite_name(gamestyle), "dph": 0})
         elif oid in (17, 49):
             entry.update({"spr": PUENTE_SPRITE, "dph": 8})
+        elif oid == 14:
+            entry.update({"spr": mp1_sprite_name(gamestyle, theme), "dph": 245 + hht})
         else:  # 91 (Seesaw) / 11 (Lift) -- moving platform
             entry.update({"spr": platform_sprite_name(gamestyle), "dph": -1, "dir": 2})
         out.append(entry)
