@@ -211,7 +211,7 @@ OBJ_ID_MAP = {
     52:  None,                      # Wiggler
     53:  "obj_cinta_res",           # Fast Conveyor Belt
     54:  "obj_soplete_res",         # Burner
-    55:  "obj_door_res",            # Door
+    55:  None,                      # Door -> S8 paired entry, see build_doors
     56:  "obj_cheepcheep_res",      # Cheep Cheep
     57:  "obj_muncher_res",         # Muncher
     58:  "obj_rocky_res",           # Rocky Wrench
@@ -352,6 +352,7 @@ OBJ_LEFT_ANCHOR_IDS = {14, 16, 71}  # Mushroom / Semisolid / Half-Collision Plat
 # verified). Bullet Bill Blaster / Semisolid Platform / Cannon (13/16/47) are
 # no longer routed through this S4 path -- see build_cannons /
 # build_platform_objects, which apply the same (h-1)*PX shift directly.
+#
 OBJ_H_ANCHOR_TOP_IDS = {14, 32, 71}
 
 # Every key an S4 object dict carries (from a real .swe). All flags default to
@@ -674,7 +675,7 @@ def build_pipes(objects):
 
 
 # MM2 object ids handled by dedicated builders, not the generic S4 path.
-_NON_S4_IDS = {9, 11, 13, 16, 47, 91}  # 9=Pipe (S5), 11/13/16/47/91 -> S6/S7 (see below)
+_NON_S4_IDS = {9, 11, 13, 16, 47, 55, 91}  # 9=Pipe (S5), 55=Door (S8), 11/13/16/47/91 -> S6/S7 (see below)
 
 
 def build_objects(objects):
@@ -720,6 +721,42 @@ def build_objects(objects):
             entry["rot"] = SKEWER_ROT.get(entry["dir"], 0)
         out.append(entry)
     return out, dropped
+
+
+def build_doors(objects):
+    """MM2 Door (id 55) -> SWE S8 "obj_door_res" entries.
+
+    SMMWE stores a connected door PAIR as a single S8 entry holding both
+    doors' positions: {"xx","yy"} for one door and {"dr_x","dr_y"} for its
+    linked partner (reverse-engineered from "3000621 but with the doors.swe").
+    Position uses the same (col*PX, (FIELD_HEIGHT_TILES-1-row)*PX) formula as
+    the generic S4 path (object_cell, no offsets).
+
+    MM2's JSON has no cid/lid/sid pair link for doors (always -1), but bits
+    19-22 of `flag`, i.e. (flag >> 19) & 0xF, hold a per-door pairing order
+    (confirmed against the reference file's 3 S8 entries and the user's
+    explicit pairing for all 4 pairs in this level). Doors are sorted by
+    that order and paired consecutively (1st&2nd, 3rd&4th, ...); within each
+    pair the higher-order door's position becomes "xx/yy" and the
+    lower-order door's becomes "dr_x/dr_y", matching the reference exactly.
+    A trailing, unpaired door is dropped.
+    """
+    doors = sorted(
+        (o for o in objects if o.get("id") == 55),
+        key=lambda o: (o.get("flag", 0) >> 19) & 0xF,
+    )
+    out = []
+    for lo, hi in zip(doors[0::2], doors[1::2]):
+        c_lo, r_lo = object_cell(lo)
+        c_hi, r_hi = object_cell(hi)
+        out.append({
+            "xx": c_hi * PX,
+            "yy": (FIELD_HEIGHT_TILES - 1 - r_hi) * PX,
+            "dr_x": c_lo * PX,
+            "dr_y": (FIELD_HEIGHT_TILES - 1 - r_lo) * PX,
+            "ID": "obj_door_res",
+        })
+    return out
 
 
 def build_cannons(objects, occ):
@@ -927,6 +964,7 @@ def build_world(j, *, user, name, desc, date_str, time_str):
     theme = THEME_MAP.get(j.get("theme_raw", 0), "overworld")
     s4, dropped = build_objects(objects)
     s5 = build_pipes(objects)
+    s8 = build_doors(objects)
 
     # Slopes have no SWE equivalent -- fill their footprint in as solid ground.
     slope_cells = slope_fill_cells(objects)
@@ -955,7 +993,7 @@ def build_world(j, *, user, name, desc, date_str, time_str):
         "S5": s5,
         "S6": s6,
         "S7": s7,
-        "S8": [],
+        "S8": s8,
     }
     return world, dropped
 
@@ -1055,6 +1093,7 @@ def main():
     print(f"  pipes        : {len(s0['S5'])}")
     print(f"  cannons      : {len(s0['S6'])}")
     print(f"  platforms    : {len(s0['S7'])}")
+    print(f"  doors        : {len(s0['S8'])}")
     if dropped:
         total = sum(dropped.values())
         print(f"  dropped {total} object(s) with no SMMWE equivalent:")
