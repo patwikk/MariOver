@@ -173,7 +173,8 @@ OBJ_ID_MAP = {
     14:  "obj_mushroom_platform_res",  # Mushroom Platform
     15:  "obj_bobomb_res",          # Bob-omb
     # 16 Semisolid Platform -> S7 "obj_semisolid_platform1", see build_platform_objects
-    17:  "obj_puente_res",          # Bridge
+    # 17 Bridge -> S7 "obj_puente_res", see build_platform_objects / PLATFORM_S7_IDS
+    17:  None,
     18:  "obj_pswitch_res",         # P Switch
     19:  "obj_pow_res",             # POW Block
     20:  "obj_mushroom_res",        # Super Mushroom
@@ -205,7 +206,8 @@ OBJ_ID_MAP = {
     46:  "obj_drybones_res",        # Dry Bones
     # 47 Cannon -> S6 "obj_cannon_res", see build_cannons
     48:  "obj_blooper_res",         # Blooper
-    49:  "obj_puente_res",          # Castle Bridge (approx)
+    # 49 Castle Bridge (approx) -> S7 "obj_puente_res", see build_platform_objects / PLATFORM_S7_IDS
+    49:  None,
     50:  "obj_spring_res",          # Jumping Machine (approx)
     51:  None,                      # Skipsqueak
     52:  None,                      # Wiggler
@@ -338,7 +340,7 @@ OBJ_Y_OFFSET_PX = {
 # the MM2 footprint (col = x // SUBPX), matching _LEFT_ANCHOR in
 # mm2_viewer_json.py, instead of the generic centered formula
 # col = x // SUBPX - w // 2.
-OBJ_LEFT_ANCHOR_IDS = {14, 16, 71}  # Mushroom / Semisolid / Half-Collision Platform
+OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 49, 71}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge
 
 # MM2 object ids whose `h` (tile height, growing UP from the (x,y) anchor at
 # the bottom row) is not represented by a stretched SWE sprite -- instead the
@@ -405,7 +407,17 @@ PLATFORM_S7_IDS = {
     13: "obj_bullebill_base_res",    # Bullet Bill Blaster
     91: "obj_platform_res",          # Seesaw -> sized moving platform
     11: "obj_platform_res",          # Lift -> moving platform
+    17: "obj_puente_res",            # Bridge
+    49: "obj_puente_res",            # Castle Bridge (approx)
 }
+
+# obj_puente_res sprite name. From a hand-placed reference save ("bridge
+# example .swe", NSMBU/ghost) containing 5 bridges of width 3-7: every
+# bridge used "spr_NSMBU_puente_underground" regardless of the level's
+# theme, and dph=8/hht=3/dir=0 were constant across all 5. No theme/
+# gamestyle variants are confirmed, so this single verified sprite is used
+# for every bridge.
+PUENTE_SPRITE = "spr_NSMBU_puente_underground"
 
 # SWE gamestyle int (see GAMESTYLE_MAP) -> sprite-name prefix used by the S7
 # "ssp1"/"bullebill_base" sprites. SMW (2) sprites have no prefix.
@@ -675,7 +687,7 @@ def build_pipes(objects):
 
 
 # MM2 object ids handled by dedicated builders, not the generic S4 path.
-_NON_S4_IDS = {9, 11, 13, 16, 47, 55, 91}  # 9=Pipe (S5), 55=Door (S8), 11/13/16/47/91 -> S6/S7 (see below)
+_NON_S4_IDS = {9, 11, 13, 16, 17, 47, 49, 55, 91}  # 9=Pipe (S5), 55=Door (S8), 11/13/16/17/47/49/91 -> S6/S7 (see below)
 
 
 def build_objects(objects):
@@ -836,8 +848,8 @@ def build_cannons(objects, occ):
 
 
 def build_platform_objects(objects, *, gamestyle, theme):
-    """MM2 Bullet Bill Blaster (13) / Semisolid Platform (16) / Seesaw (91)
-    -> SWE S7 entries.
+    """MM2 Bullet Bill Blaster (13) / Semisolid Platform (16) / Seesaw (91) /
+    Bridge (17) / Castle Bridge (49, approx) -> SWE S7 entries.
 
     S7 is a "stretchy sprite" object: `spr` selects the themed sprite and
     `wth`/`hht` size it (in MM2 tile units). Position reuses the
@@ -864,6 +876,12 @@ def build_platform_objects(objects, *, gamestyle, theme):
     Number") in any level containing a Lift. Routed here with the same
     dph=-1/dir=2/spr as the (working) seesaw mapping, but hht=1 to match
     Lift's actual h=1 footprint (seesaw's hht=3 was seesaw-specific).
+
+    Bridge (17) / Castle Bridge (49) -> "obj_puente_res", left-anchored
+    (OBJ_LEFT_ANCHOR_IDS) like the other stretchy platforms. wth=w (MM2
+    enforces a minimum bridge width of 3, matching the reference's
+    smallest example); hht=3/dph=8/dir=0/spr=PUENTE_SPRITE are constant,
+    verified against all 5 widths (3-7) in "bridge example .swe".
     """
     out = []
     for o in objects:
@@ -877,11 +895,15 @@ def build_platform_objects(objects, *, gamestyle, theme):
             wth, hht = max(4, w), 3
         elif oid == 11:
             wth, hht = max(4, w), 1
+        elif oid in (17, 49):
+            wth, hht = w, 3
         else:
             wth, hht = w, h
         yy = ground_yy(row) - (hht - 1) * PX
         if oid == 91:
             yy += 2 * PX  # nudge the seesaw replacement down 2 tiles
+        elif oid in (17, 49):
+            yy += 2 * PX  # bridge sprite sits 2 tiles above the generic anchor
         entry = dict(S7_TEMPLATE)
         entry.update({
             "ID": PLATFORM_S7_IDS[oid],
@@ -894,6 +916,8 @@ def build_platform_objects(objects, *, gamestyle, theme):
             entry.update({"spr": ssp_sprite_name(gamestyle, theme), "dph": 255})
         elif oid == 13:
             entry.update({"spr": bullebill_sprite_name(gamestyle), "dph": 0})
+        elif oid in (17, 49):
+            entry.update({"spr": PUENTE_SPRITE, "dph": 8})
         else:  # 91 (Seesaw) / 11 (Lift) -- moving platform
             entry.update({"spr": platform_sprite_name(gamestyle), "dph": -1, "dir": 2})
         out.append(entry)
