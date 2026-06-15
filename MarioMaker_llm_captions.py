@@ -195,11 +195,11 @@ PROMPT_TEMPLATE = """\
 You are an expert Mario Maker 2 level captioner.
 
 You will receive three inputs:
-1. A symbol dictionary mapping ASCII characters to Mario Maker 2 objects.
+1. A symbol dictionary mapping level grid symbols to Mario Maker 2 objects.
 2. Pre-computed level metadata (object tile counts, terrain column heights, floor/ceiling analysis).
-3. An ASCII level grid (read top-to-bottom, left-to-right).
+3. A level grid (read top-to-bottom, left-to-right).
 
-Trust the metadata for object counts and terrain heights. Do not re-count tiles from the ASCII.
+Trust the metadata for object counts and terrain heights. Do not re-count tiles from the grid.
 
 Your output trains a diffusion model. Each phrase must correspond to one concrete, visible structure or feature.
 
@@ -334,6 +334,9 @@ ADDITIONAL RULES
 * Prefer concise captions over exhaustive tile inventories.
 * If a region has no notable features beyond the floor, do not add filler phrases.
 
+The worked examples below use single-character symbols purely for illustration.
+The symbol dictionary above defines the actual symbols used in the level grid.
+
 ---
 
 WORKED EXAMPLES
@@ -406,7 +409,7 @@ Metadata:
 {metadata}
 
 
-ASCII Level:
+{grid_label}:
 {ascii_grid}
 
 Write the caption. DO NOT INCLUDE ANY NON ENGLISH CHARACTERS."""
@@ -533,6 +536,35 @@ def scene_to_ascii(scene, id_to_char):
     )
 
 
+# ── T0x token format (based on --tileset-we) ──────────────────────────────────
+
+def build_char_to_token(id_to_char):
+    """Map each tile character to a 'T<NN>' token, NN = its numeric tile ID."""
+    width = max(2, len(str(len(id_to_char) - 1)))
+    return {char: f"T{idx:0{width}d}" for idx, char in id_to_char.items()}
+
+
+def build_token_dict_string(tileset_path, char_to_token, char_names):
+    with open(tileset_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    lines = []
+    for char, tags in data["tiles"].items():
+        token = char_to_token[char]
+        name = char_names.get(char)
+        if not name:
+            name = tags[-1].replace("-", " ").title() if tags else "Unknown"
+        lines.append(f"{token} = {name}")
+    return "\n".join(lines)
+
+
+def scene_to_tokens(scene, id_to_char, char_to_token):
+    unknown = char_to_token.get("?", "T??")
+    return "\n".join(
+        " ".join(char_to_token.get(id_to_char.get(tid, "?"), unknown) for tid in row)
+        for row in scene
+    )
+
+
 def call_ollama(prompt, model, url, timeout, retries):
     payload = json.dumps({
         "model": model,
@@ -620,15 +652,25 @@ def _validate_tileset_match(dataset, id_to_char, tileset_path):
         )
 
 
-def generate_captions(dataset_path, tileset_path, output_path, model, url, timeout, retries):
+def generate_captions(dataset_path, tileset_path, output_path, model, url, timeout, retries,
+                       grid_format="ascii", tileset_we_path=None):
     with open(dataset_path, "r", encoding="utf-8") as f:
         dataset = json.load(f)
 
     id_to_char = build_id_to_char(tileset_path)
     char_names = get_char_names(tileset_path)
-    dict_string = build_dict_string(tileset_path, char_names)
 
     _validate_tileset_match(dataset, id_to_char, tileset_path)
+
+    if grid_format == "tokens":
+        we_id_to_char = build_id_to_char(tileset_we_path)
+        char_to_token = build_char_to_token(we_id_to_char)
+        we_char_names = get_char_names(tileset_we_path)
+        dict_string = build_token_dict_string(tileset_we_path, char_to_token, we_char_names)
+        grid_label = "Token Grid (each cell is a tile-ID token, space-separated)"
+    else:
+        dict_string = build_dict_string(tileset_path, char_names)
+        grid_label = "ASCII Level"
 
     existing = load_existing(output_path)
     if existing:
@@ -651,10 +693,14 @@ def generate_captions(dataset_path, tileset_path, output_path, model, url, timeo
             skipped += 1
             continue
 
-        ascii_grid = scene_to_ascii(scene, id_to_char)
+        if grid_format == "tokens":
+            ascii_grid = scene_to_tokens(scene, id_to_char, char_to_token)
+        else:
+            ascii_grid = scene_to_ascii(scene, id_to_char)
         metadata = compute_metadata(scene, id_to_char, char_names, tileset_path)
         prompt = PROMPT_TEMPLATE.format(
             dict_string=dict_string,
+            grid_label=grid_label,
             ascii_grid=ascii_grid,
             metadata=metadata,
         )
@@ -691,8 +737,8 @@ def main():
     parser.add_argument("--dataset", required=True, help="Input dataset JSON.")
     parser.add_argument(
         "--tileset",
-        required=True,
-        help="Tileset JSON (extended_tiles.json or mm2_tileset_full.json).",
+        default="extended_tiles.json",
+        help="Tileset JSON (extended_tiles.json or mm2_tileset_full.json). Default: extended_tiles.json",
     )
     parser.add_argument("--output", required=True, help="Output captioned JSON.")
     parser.add_argument(
@@ -721,12 +767,35 @@ def main():
         default=3,
         help="Retry attempts on network failure. Default: 3",
     )
+    parser.add_argument(
+        "--grid-format",
+        choices=["ascii", "tokens"],
+        default="tokens",
+        help=(
+            "How the level grid is rendered in the prompt. 'tokens' (default) renders "
+            "each cell as a 'T<NN>' token numbered per --tileset-we, which is simpler "
+            "for LLMs to read and count. 'ascii' uses the raw tile characters from "
+            "--tileset, same as the original behavior."
+        ),
+    )
+    parser.add_argument(
+        "--tileset-we",
+        default="mm2_tileset_we.json",
+        help=(
+            "Tileset JSON defining the T0x token numbering, used only when "
+            "--grid-format tokens. Default: mm2_tileset_we.json"
+        ),
+    )
     args = parser.parse_args()
 
     for path, label in [(args.dataset, "dataset"), (args.tileset, "tileset")]:
         if not os.path.isfile(path):
             print(f"Error: {label} not found: {path}")
             sys.exit(1)
+
+    if args.grid_format == "tokens" and not os.path.isfile(args.tileset_we):
+        print(f"Error: tileset-we not found: {args.tileset_we}")
+        sys.exit(1)
 
     generate_captions(
         args.dataset,
@@ -736,6 +805,8 @@ def main():
         args.url,
         args.timeout,
         args.retries,
+        grid_format=args.grid_format,
+        tileset_we_path=args.tileset_we,
     )
 
 

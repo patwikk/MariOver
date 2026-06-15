@@ -34,7 +34,6 @@
         "{" : ["solid", "starting brick"],
         "=" : ["solid", "castle bridge"],
 
-        "|" : ["solid", "pipe", "warp"],
         "D" : ["passable", "door", "warp"],
         "k" : ["passable", "collectable", "key"],
         "f" : ["passable", "checkpoint flag"],
@@ -64,7 +63,6 @@
         "9" : ["enemy", "damaging", "hazard", "moving"],
         "A" : ["enemy", "damaging", "hazard", "moving"],
 
-        "¢" : ["passable", "collectable", "coin"],
         "$" : ["passable", "collectable", "coin", "red coin"],
         "£" : ["passable", "collectable", "coin", "big coin"],
         "U" : ["passable", "collectable", "power-up", "one up"],
@@ -98,6 +96,6 @@
         "Ô" : ["passable", "vehicle", "clown car"],
         "Õ" : ["passable", "vehicle", "koopa car"],
         "×" : ["passable", "decoration", "starting arrow"],
-        "Ø" : ["solid", "hazard", "shooter", "cannon"],
+        "Ø" : ["solid", "hazard", "shooter", "cannon"]
     }
 }

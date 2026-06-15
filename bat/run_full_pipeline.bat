@@ -24,10 +24,12 @@ if "%SEED%"=="" set SEED=0
 set TILESET=smb.json
 set NUM_TILES=13
 set EVAL_TILESET=mm2_tileset_full.json
+set CAPTION_ARGS=
 if /I "%GAME%"=="MM" (
     set TILESET=extended_tiles.json
     set NUM_TILES=23
     set EVAL_TILESET=extended_tiles.json
+    set CAPTION_ARGS=--grid-format tokens --tileset-we mm2_tileset_we.json
 )
 
 set RAW_OUTPUT=datasets\%GAME%_Levels-%TYPE%.json
