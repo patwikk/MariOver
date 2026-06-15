@@ -203,6 +203,7 @@ SKIP_ITEM_NAMES = [
     "conveyor_belt",
     "track",
     "track_block",
+    "snake_block",
 ]
 
 SKIP_OBJECT_IDS = {OBJ_ID[name] for name in SKIP_ITEM_NAMES}
