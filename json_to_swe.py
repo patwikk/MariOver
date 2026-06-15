@@ -260,8 +260,8 @@ OBJ_ID_MAP = {
     96:  None,                      # Ant Trooper
     97:  None,                      # Warp Box
     98:  "obj_bowserjr_res",        # Bowser Jr.
-    99:  "obj_onoffblock_res",      # ON/OFF Block
-    100: None,                      # Dotted-Line Block
+    99:  None,                      # ON/OFF Block -> obj_onoffblock_res/_blue_res, see ONOFF_SWE_IDS
+    100: None,                      # Dotted-Line Block -> obj_onoffplatform_res/_blue_res, see ONOFF_SWE_IDS
     101: None,                      # Water Marker (liquid is in S1 wl)
     102: "obj_monty_res",           # Monty Mole
     103: "obj_cheepcheep_res",      # Fish Bone -> Cheep Cheep (approx)
@@ -317,6 +317,23 @@ SKEWER_CEILING_FLAG = 1 << 23
 SKEWER_DIR = {0: 1, SKEWER_CEILING_FLAG: 3}
 SKEWER_ROT = {1: 0, 3: 180}
 
+# ON/OFF Block (99) / Dotted-Line Block (100) -> SWE S4 "ID", keyed by MM2
+# flag bit 2 (flag & 4), a shared red/blue "color" flag for both ids.
+# Verified exhaustively against "3000209_6 but right.swe": all 73 id-99/100
+# objects in that level (4x id 99, 69x id 100) match this rule + the generic
+# centered-anchor position formula exactly, including the surprising 1:1
+# mapping of id 99 ("ON/OFF Block") to "obj_onoffblock_res" rather than the
+# "obj_onoffplatform_*" pair (which is instead what id 100, "Dotted-Line
+# Block", maps to). Value tuple is (flag&4 clear, flag&4 set).
+# NOTE: "obj_onoffblock_blue_res" (id 99 with flag&4 set) has no example in
+# the reference and is extrapolated from the verified obj_onoffplatform_res/
+# _blue_res pair for id 100.
+ONOFF_COLOR_FLAG = 1 << 2
+ONOFF_SWE_IDS = {
+    99:  ("obj_onoffblock_res", "obj_onoffblock_blue_res"),
+    100: ("obj_onoffplatform_blue_res", "obj_onoffplatform_res"),
+}
+
 # Constant/default fields for an S5 pipe entry, taken verbatim from a
 # hand-placed "vertical, length 4" pipe saved by the SMMWE editor (see
 # build_pipes). Per-pipe code overrides sz/sclx/rot/xscl/yscl/dir/xx/yy/
@@ -342,6 +359,15 @@ OBJ_Y_OFFSET_PX = {
 # mm2_viewer_json.py, instead of the generic centered formula
 # col = x // SUBPX - w // 2.
 OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 49, 71}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge
+
+# Thwomp (12, h=2) is top-anchored like the ids below: with the generic
+# bottom-anchored formula its obj_thwomp_res sprite's bottom row lands on the
+# same cell as the object placed one row above it, hiding that object under
+# the Thwomp. Shifting yy up by (h-1)*PX=1 tile fixes both Thwomps in
+# "3000209_6 but right.swe" -- one was fully overlapping a side-by-side
+# ON/OFF Block pair (hiding both blocks under it), the other sat one tile
+# too low above its own pair.
+OBJ_H_ANCHOR_TOP_IDS = OBJ_H_ANCHOR_TOP_IDS | {12}
 
 # MM2 object ids whose `h` (tile height, growing UP from the (x,y) anchor at
 # the bottom row) is not represented by a stretched SWE sprite -- instead the
@@ -715,7 +741,11 @@ def build_objects(objects):
         oid = o.get("id")
         if oid in _NON_S4_IDS or oid in _SLOPE_IDS:
             continue
-        swe_id = OBJ_ID_MAP.get(oid)
+        if oid in ONOFF_SWE_IDS:
+            off_id, on_id = ONOFF_SWE_IDS[oid]
+            swe_id = on_id if o.get("flag", 0) & ONOFF_COLOR_FLAG else off_id
+        else:
+            swe_id = OBJ_ID_MAP.get(oid)
         if swe_id is None:
             name = o.get("name", f"id={oid}")
             dropped[name] = dropped.get(name, 0) + 1
