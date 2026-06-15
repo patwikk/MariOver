@@ -303,14 +303,16 @@ MM2_PIPE_DIR = {0x00: "R", 0x20: "L", 0x40: "U", 0x60: "D"}
 PIPE_DIR_MAP = {"U": 0, "R": 1, "D": 2, "L": 3}
 PIPE_ROT = {0: 0, 1: -90, 2: 180, 3: -270}
 
-# obj_skewer_res `dir` (1=down, 2=right, 3=up, 4=left -- empirically confirmed
-# in-editor by rotating a placed skewer). dir=0 (the generic S4 default) is
-# not a valid case in scr_edit_to_play and crashes on entering play mode, so
-# Skewer must always get one of 1-4. MM2 flag bit 23 (1<<23) distinguishes
-# ceiling-mounted skewers (point down) from floor-mounted ones (point up);
-# left/right-mounted skewers aren't reverse-engineered yet.
+# obj_skewer_res `dir`/`rot`. dir=0 (the generic S4 default) is not a valid
+# case in scr_edit_to_play and crashes on entering play mode, so Skewer must
+# always get one of 1-4. MM2 flag bit 23 (1<<23) distinguishes ceiling-mounted
+# skewers from floor-mounted ones. Mapping reverse-engineered by hand-placing
+# all 4 of this level's skewers correctly in the SMMWE editor and inspecting
+# the resulting .swe: bit23 clear -> dir=1/rot=0, bit23 set -> dir=3/rot=180.
+# left/right-mounted skewers (dir=2/4) aren't reverse-engineered yet.
 SKEWER_CEILING_FLAG = 1 << 23
-SKEWER_DIR = {0: 3, SKEWER_CEILING_FLAG: 1}
+SKEWER_DIR = {0: 1, SKEWER_CEILING_FLAG: 3}
+SKEWER_ROT = {1: 0, 3: 180}
 
 # Constant/default fields for an S5 pipe entry, taken verbatim from a
 # hand-placed "vertical, length 4" pipe saved by the SMMWE editor (see
@@ -706,8 +708,16 @@ def build_objects(objects):
             "scl": scl,
             "dir": 0,   # best-effort: MM2 flag bitfields aren't carried over
         })
-        if oid == 83:  # Skewer: dir=0 isn't a valid case in scr_edit_to_play
-            entry["dir"] = SKEWER_DIR.get(o.get("flag", 0) & SKEWER_CEILING_FLAG, 3)
+        if oid == 83:
+            # Skewer anchors one column right of and one row above the
+            # generic centered-bottom cell (col + w//2, row + 1) -- derived
+            # by hand-placing all 4 of this level's skewers correctly in the
+            # SMMWE editor and comparing the resulting .swe (see SKEWER_DIR).
+            w = max(1, o.get("w", 1))
+            entry["xx"] = (col + w // 2) * PX
+            entry["yy"] = yy - PX
+            entry["dir"] = SKEWER_DIR.get(o.get("flag", 0) & SKEWER_CEILING_FLAG, 1)
+            entry["rot"] = SKEWER_ROT.get(entry["dir"], 0)
         out.append(entry)
     return out, dropped
 
