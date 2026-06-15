@@ -60,7 +60,7 @@ mm2_tileset_dictionary.txt, where one exists.
   41  Boo                               u
   42  Clown Car                         Ô
   43  Spike Trap                        Ç
-  44  Big (Mega) Mushroom                ¶
+  44  Big (Mega) Mushroom (Style Power-up A, see §5)  ¶
   45  Goomba's Shoe                     µ
   46  Dry Bones                         9
   47  Cannon                            Ø
@@ -97,7 +97,7 @@ mm2_tileset_dictionary.txt, where one exists.
   78  Pokey                             Y
   79  P Block                           p
   80  Sprint Platform                   ½
-  81  SMB2 Mushroom                     §
+  81  SMB2 Mushroom (Style Power-up B, see §5)         §
   82  Donut Block Platform              Ã
   83  Skewer                            É
   84  Snake Block                       ¹
@@ -224,3 +224,34 @@ clear_condition_type_raw (Level.ClearCondition):
   ClearCondition enum in level.py for the full id -> condition list;
   toost JSON exports already include the human-readable
   "clear_condition_type" string alongside this code.
+
+-----------------------------------------------------------------------
+5) Style Power-ups (objects.id 44 and 81)
+-----------------------------------------------------------------------
+SMM2 reuses two object slots across game styles: the decoder always
+names them "Big Mushroom" (id 44) and "SMB2 Mushroom" (id 81), but the
+power-up the player actually receives -- and the sprite shown in-game --
+depends on the level's gamestyle/gamestyle_raw. This is how
+style-exclusive power-ups (e.g. SMB3's Super Leaf, SMW's Cape Feather)
+are represented in the data: there is no separate obj_id per style,
+just these two slots reinterpreted per gamestyle_raw.
+
+  gamestyle_raw   Slot A (id 44, since v1.0.0)   Slot B (id 81, since v3.0.0)
+  -------------   ---------------------------    ----------------------------
+  12621  SMB1     Big Mushroom -> Mega Mario     SMB2 Mushroom -> Mini Mario
+  13133  SMB3     Super Leaf -> Raccoon Mario    Frog Suit -> Frog Mario
+  22349  SMW      Cape Feather -> Cape Mario     Power Balloon -> Balloon Mario
+  21847  NSMBU    Propeller Mushroom -> Propeller Mario   Super Acorn -> Flying Squirrel Mario
+
+  
+
+Slot B (id 81) did not exist before v3.0.0 and is currently in the
+extract_mm2_bcd.py skip list as "SMB2 Mushroom" (see replacements.md) --
+levels containing it are skipped entirely rather than mis-converted.
+
+mm2_viewer_json.py and mm2_json_to_ascii.py resolve the gamestyle-correct
+name via STYLE_POWERUP_NAMES / resolve_obj_name() before doing OBJ_META
+lookups, so e.g. an SMB3-style level's id-44 object is reported as
+"Super Leaf" rather than "Big Mushroom". The ASCII char stays the same
+(¶ for slot A, § for slot B) regardless of gamestyle, since the char
+represents the slot, not the specific power-up.

@@ -98,6 +98,14 @@ OBJ_META = {
     "Super Mushroom":      ("M", "#EE2222", CAT_ITEM),
     "Big Mushroom":        ("¶", "#CC1111", CAT_ITEM),
     "SMB2 Mushroom":       ("§", "#884488", CAT_ITEM),
+    # Style Power-up A (id 44) gamestyle variants — see resolve_obj_name()
+    "Super Leaf":          ("¶", "#CC1111", CAT_ITEM),
+    "Cape Feather":        ("¶", "#CC1111", CAT_ITEM),
+    "Propeller Mushroom":  ("¶", "#CC1111", CAT_ITEM),
+    # Style Power-up B (id 81) gamestyle variants — see resolve_obj_name()
+    "Frog Suit":           ("§", "#884488", CAT_ITEM),
+    "Power Balloon":       ("§", "#884488", CAT_ITEM),
+    "Super Acorn":         ("§", "#884488", CAT_ITEM),
     "Super Hammer":        ("¬", "#996622", CAT_ITEM),
     "P Switch":            ("¦", "#4488FF", CAT_ITEM),
     "POW Block":           ("¯", "#3366FF", CAT_ITEM),
@@ -167,6 +175,35 @@ CAT_COLORS = {
     CAT_DECO:     "#88BB88",
     CAT_OTHER:    "#AAAAAA",
 }
+
+# Style Power-ups: objects.id 44 ("Big Mushroom") and 81 ("SMB2 Mushroom")
+# are decoded with fixed SMB1 names, but the power-up actually granted (and
+# its sprite) depends on the level's gamestyle_raw. See
+# mm2_json_field_dictionary.txt §5 for the full mapping.
+STYLE_POWERUP_NAMES = {
+    "Big Mushroom": {     # Slot A (id 44, since v1.0.0)
+        12621: "Big Mushroom",       # SMB1   -> Mega Mario
+        13133: "Super Leaf",         # SMB3   -> Raccoon Mario
+        22349: "Cape Feather",        # SMW    -> Cape Mario
+        21847: "Propeller Mushroom",  # NSMBU  -> Propeller Mario
+    },
+    "SMB2 Mushroom": {    # Slot B (id 81, since v3.0.0)
+        12621: "SMB2 Mushroom",       # SMB1   -> Mini Mario
+        13133: "Frog Suit",           # SMB3   -> Frog Mario
+        22349: "Power Balloon",        # SMW    -> Balloon Mario
+        21847: "Super Acorn",          # NSMBU  -> Flying Squirrel Mario
+    },
+}
+
+
+def resolve_obj_name(obj_name: str, gamestyle_raw: int) -> str:
+    """Map a decoded object name to its gamestyle-correct name for
+    Style Power-up slots (id 44 / 81); passes through unchanged otherwise."""
+    variants = STYLE_POWERUP_NAMES.get(obj_name)
+    if variants:
+        return variants.get(gamestyle_raw, obj_name)
+    return obj_name
+
 
 def get_meta(name: str):
     return OBJ_META.get(name, OBJ_META["_unknown"])
@@ -460,7 +497,7 @@ def build_ascii_grid(level):
             if pass_n == 1 and is_bg:
                 continue
 
-            char,_,_ = get_meta(obj_name)
+            char,_,_ = get_meta(resolve_obj_name(obj_name, level.get("gamestyle_raw", 0)))
 
             if obj_name == "Pipe":
                 char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag",0)), char)

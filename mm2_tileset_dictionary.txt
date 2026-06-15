@@ -98,8 +98,14 @@ ITEMS, POWER-UPS & COLLECTABLES
 'i'   Fire Flower
 '¤'   Super Star
 'M'   Super Mushroom
-'¶'   Big (Mega) Mushroom
-'§'   SMB2 Mushroom (gives Toad's "pluck & throw" ability)
+'¶'   Style Power-up A (Big Mushroom in SMB1; Super Leaf in SMB3;
+      Cape Feather in SMW; Propeller Mushroom in NSMBU -- same object
+      slot, identity depends on the level's gamestyle, see
+      mm2_json_field_dictionary.txt §5)
+'§'   Style Power-up B (SMB2 Mushroom, gives Toad's "pluck & throw"
+      ability, in SMB1; Frog Suit in SMB3; Power Balloon in SMW; Super
+      Acorn in NSMBU -- same object slot, identity depends on the
+      level's gamestyle, see mm2_json_field_dictionary.txt §5)
 '¬'   Super Hammer
 '¦'   P Switch
 '¯'   POW Block
