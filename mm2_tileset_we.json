@@ -1,19 +1,36 @@
 {
     "tiles": {
         " " : ["passable", "empty", "air"],
-
         "#" : ["solid", "ground"],
         "B" : ["solid", "breakable", "brick"],
-        "H" : ["solid", "hard block"],
         "?" : ["solid", "question block"],
-        "h" : ["passable", "hidden block"],
+        "¢" : ["passable", "collectable", "coin"],
+        "g" : ["enemy", "damaging", "hazard", "moving"],
+        "K" : ["enemy", "damaging", "hazard", "koopa"],
+        "P" : ["enemy", "damaging", "hazard", "piranha plant"],
+        "t" : ["enemy", "damaging", "hazard", "thwomp"],
+        "^" : ["solid", "damaging", "hazard", "spike block"],
         "N" : ["solid", "note block"],
+        "³" : ["solid", "platform", "mushroom platform"],
+        "·" : ["solid", "platform", "bridge"],
+        "´" : ["passable", "platform", "semisolid"],
+        "i" : ["passable", "collectable", "power-up", "fire flower"],
+        "V" : ["solid", "enemy", "damaging", "hazard", "shooter"],
+        "|" : ["solid", "pipe", "warp"],
+        "↑" : ["solid", "pipe", "pipe direction up"],
+        "↓" : ["solid", "pipe", "pipe direction down"],
+        "←" : ["solid", "pipe", "pipe direction left"],
+        "→" : ["solid", "pipe", "pipe direction right"],
+
+
+
+        "H" : ["solid", "hard block"],
+        "h" : ["passable", "hidden block"],
         "d" : ["passable", "falling", "donut block"],
         "I" : ["solid", "slippery", "ice block"],
         "p" : ["solid", "togglable", "p block"],
         "O" : ["solid", "togglable", "on off block"],
         "." : ["passable", "togglable", "dotted line block"],
-        "^" : ["solid", "damaging", "hazard", "spike block"],
         "{" : ["solid", "starting brick"],
         "=" : ["solid", "castle bridge"],
 
@@ -23,18 +40,13 @@
         "f" : ["passable", "checkpoint flag"],
         "G" : ["passable", "goal", "flagpole"],
 
-        "g" : ["enemy", "damaging", "hazard", "moving"],
-        "K" : ["enemy", "damaging", "hazard", "moving"],
-        "P" : ["enemy", "damaging", "hazard"],
         "m" : ["enemy", "damaging", "hazard", "moving"],
-        "t" : ["enemy", "damaging", "hazard", "moving"],
         "o" : ["enemy", "damaging", "hazard", "explosive"],
         "s" : ["enemy", "damaging", "hazard", "moving"],
         "b" : ["enemy", "damaging", "hazard", "moving"],
         "L" : ["enemy", "damaging", "hazard", "moving", "flying"],
         "l" : ["passable", "lakitu cloud"],
         "Z" : ["enemy", "damaging", "hazard", "moving", "projectile"],
-        "V" : ["solid", "enemy", "damaging", "hazard", "shooter"],
         "y" : ["enemy", "damaging", "hazard", "moving", "flying"],
         "u" : ["enemy", "damaging", "hazard", "moving"],
         "X" : ["enemy", "damaging", "hazard", "moving", "boss"],
@@ -56,7 +68,6 @@
         "$" : ["passable", "collectable", "coin", "red coin"],
         "£" : ["passable", "collectable", "coin", "big coin"],
         "U" : ["passable", "collectable", "power-up", "one up"],
-        "i" : ["passable", "collectable", "power-up", "fire flower"],
         "¤" : ["passable", "collectable", "power-up", "star"],
         "M" : ["passable", "collectable", "power-up", "mushroom"],
         "¶" : ["passable", "collectable", "power-up", "mushroom", "big mushroom"],
@@ -66,9 +77,6 @@
         "µ" : ["enemy", "damaging", "hazard", "moving", "shoe"],
 
         "-" : ["passable", "platform", "moving", "lift"],
-        "³" : ["solid", "platform", "mushroom platform"],
-        "´" : ["passable", "platform", "semisolid"],
-        "·" : ["solid", "platform", "bridge"],
         "¸" : ["solid", "platform", "moving", "lava lift"],
         "¿" : ["passable", "interactive", "swinging claw"],
         "Â" : ["passable", "platform", "semisolid", "half collision"],
@@ -91,10 +99,5 @@
         "Õ" : ["passable", "vehicle", "koopa car"],
         "×" : ["passable", "decoration", "starting arrow"],
         "Ø" : ["solid", "hazard", "shooter", "cannon"],
-
-        "↑" : ["solid", "pipe", "pipe direction up"],
-        "↓" : ["solid", "pipe", "pipe direction down"],
-        "←" : ["solid", "pipe", "pipe direction left"],
-        "→" : ["solid", "pipe", "pipe direction right"]
     }
 }
