@@ -283,11 +283,20 @@ MULTI-TILE OBJECTS
 
 Count game objects, not ASCII tiles. A pipe three tiles tall is one pipe.
 
+PLATFORM-TYPE TILES
+
+Several tile types behave like the Mushroom Platform: a contiguous run of these tiles forms ONE platform object, not one object per tile. This applies to (when present in the symbol dictionary): Mushroom Platform, Semisolid Platform, Bridge, Cloud, Snake Block, Track Block, Conveyor Belt, Fast Conveyor Belt, Sprint Platform, Half-Collision Platform, Donut Block Platform, Lava Lift, and Seesaw.
+
+A run of these tiles, however long, is one platform. If the grid shows multiple separate runs of the same tile type, count each run as its own platform.
+  one mushroom platform / two semisolid platforms / one snake block platform left
+
 QUANTITIES
 
-one / two / three / a few (3-4) / several (5-9) / many (10+)
+one / two / three / a few (4-5) / several (6-9) / many (10-14) / a ton of (15+)
 
-Never write "one group of N" or "a cluster of N" — just write the count directly: "four enemies" not "one group of four enemies."
+Use exact numbers only for one, two, or three. For four or more, use "a few", "several", "many", or "a ton of" instead of writing out the precise count — do not write "seven enemies" or "fifteen platform tiles".
+
+Never write "one group of N" or "a cluster of N" — describe the quantity directly: "several enemies" not "one group of several enemies."
 
 POSITION
 
