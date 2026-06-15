@@ -124,6 +124,9 @@ MM2_CHAR_NAMES = {
     "5": "Iggy Koopa",
     "6": "Roy Koopa",
     "7": "Ludwig von Koopa",
+    # Style Ride slot (id 45): gamestyle-dependent (Yoshi's Egg in
+    # SMW/NSMBU); scenes carry no gamestyle, so the SMB1/SMB3 name is
+    # used here as a baseline. See mm2_json_field_dictionary.txt §6.
     "\xb5": "Goomba's Shoe",
     "\xa2": "Coin",
     "$": "Red Coin",

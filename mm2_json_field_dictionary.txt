@@ -61,7 +61,7 @@ mm2_tileset_dictionary.txt, where one exists.
   42  Clown Car                         Ô
   43  Spike Trap                        Ç
   44  Big (Mega) Mushroom (Style Power-up A, see §5)  ¶
-  45  Goomba's Shoe                     µ
+  45  Goomba's Shoe (Style Ride, see §6)  µ
   46  Dry Bones                         9
   47  Cannon                            Ø
   48  Blooper                           q
@@ -255,3 +255,32 @@ lookups, so e.g. an SMB3-style level's id-44 object is reported as
 "Super Leaf" rather than "Big Mushroom". The ASCII char stays the same
 (¶ for slot A, § for slot B) regardless of gamestyle, since the char
 represents the slot, not the specific power-up.
+
+-----------------------------------------------------------------------
+6) Style Ride (objects.id 45)
+-----------------------------------------------------------------------
+Same slot-reuse mechanic as §5, but for a rideable vehicle instead of a
+power-up. The decoder always names id 45 "Goomba's Shoe", but in the SMW
+and NSMBU game styles the same slot is a Yoshi's Egg, which hatches into
+a rideable Yoshi when Mario walks up to it.
+
+  gamestyle_raw   Slot (id 45)
+  -------------   -------------------------------------------
+  12621  SMB1     Goomba's Shoe -- enemy-occupied shoe, becomes
+                   rideable once the enemy inside is defeated
+  13133  SMB3     Goomba's Shoe (same as SMB1)
+  22349  SMW      Yoshi's Egg -- hatches into rideable Yoshi
+  21847  NSMBU    Yoshi's Egg (same as SMW)
+
+(SM3DW / gamestyle_raw 22323 intentionally not mapped here, consistent
+with §5 and this project's "no 3D World" policy.)
+
+This corresponds to the clear_condition_type_raw value
+4209535561 ("reach the goal while riding Yoshi"), which confirms Yoshi
+is a real, level-placeable mechanic even though it has no dedicated
+obj_id of its own.
+
+mm2_viewer_json.py and mm2_json_to_ascii.py resolve this via
+STYLE_RIDE_NAMES / resolve_obj_name(), the same mechanism used for §5.
+The ASCII char stays µ regardless of gamestyle, since the char represents
+the slot, not the specific ride.

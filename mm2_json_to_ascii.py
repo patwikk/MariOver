@@ -94,7 +94,7 @@ OBJ_META = {
     "Large Coin":          ("£", "#FFAA00", CAT_ITEM),
     "1-Up Mushroom":       ("U", "#00CC00", CAT_ITEM),
     "Fire Flower":         ("i", "#FF5500", CAT_ITEM),
-    "Super Star":          ("*", "#FFFF00", CAT_ITEM),
+    "Super Star":          ("¤", "#FFFF00", CAT_ITEM),
     "Super Mushroom":      ("M", "#EE2222", CAT_ITEM),
     "Big Mushroom":        ("¶", "#CC1111", CAT_ITEM),
     "SMB2 Mushroom":       ("§", "#884488", CAT_ITEM),
@@ -110,7 +110,9 @@ OBJ_META = {
     "P Switch":            ("¦", "#4488FF", CAT_ITEM),
     "POW Block":           ("¯", "#3366FF", CAT_ITEM),
     "Spring":              ("±", "#DDDD00", CAT_ITEM),
+    # Style Ride (id 45) gamestyle variants — see resolve_obj_name()
     "Goomba's Shoe":       ("µ", "#CC6600", CAT_ITEM),
+    "Yoshi's Egg":         ("µ", "#CC6600", CAT_ITEM),
     "Cannon Box":          ("]", "#666666", CAT_ITEM),
     "Propeller Box":       ("}", "#8888FF", CAT_ITEM),
     "Goomba Mask":         (")", "#CC6600", CAT_ITEM),
@@ -195,13 +197,27 @@ STYLE_POWERUP_NAMES = {
     },
 }
 
+# Style Ride: objects.id 45 ("Goomba's Shoe") is decoded with a fixed
+# SMB1/SMB3 name, but in SMW/NSMBU the same slot is a Yoshi's Egg that
+# hatches into a rideable Yoshi. See mm2_json_field_dictionary.txt §6.
+STYLE_RIDE_NAMES = {
+    "Goomba's Shoe": {    # Slot (id 45)
+        12621: "Goomba's Shoe",  # SMB1
+        13133: "Goomba's Shoe",  # SMB3
+        22349: "Yoshi's Egg",    # SMW
+        21847: "Yoshi's Egg",    # NSMBU
+    },
+}
+
 
 def resolve_obj_name(obj_name: str, gamestyle_raw: int) -> str:
     """Map a decoded object name to its gamestyle-correct name for
-    Style Power-up slots (id 44 / 81); passes through unchanged otherwise."""
-    variants = STYLE_POWERUP_NAMES.get(obj_name)
-    if variants:
-        return variants.get(gamestyle_raw, obj_name)
+    Style Power-up slots (id 44 / 81) and the Style Ride slot (id 45);
+    passes through unchanged otherwise."""
+    for table in (STYLE_POWERUP_NAMES, STYLE_RIDE_NAMES):
+        variants = table.get(obj_name)
+        if variants:
+            return variants.get(gamestyle_raw, obj_name)
     return obj_name
 
 

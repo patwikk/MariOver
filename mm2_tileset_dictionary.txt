@@ -87,7 +87,11 @@ ENEMIES & BOSSES
 '5'   Iggy Koopa         - Koopaling boss
 '6'   Roy Koopa          - Koopaling boss
 '7'   Ludwig von Koopa   - Koopaling boss
-'µ'   Goomba's Shoe      - giant shoe that an enemy can ride around in
+'µ'   Style Ride (Goomba's Shoe in SMB1/SMB3 -- giant shoe an enemy
+      rides, becomes rideable once the enemy is defeated; Yoshi's Egg
+      in SMW/NSMBU -- hatches into rideable Yoshi -- same object slot,
+      identity depends on the level's gamestyle, see
+      mm2_json_field_dictionary.txt §6)
 
 ITEMS, POWER-UPS & COLLECTABLES
 -------------------------------

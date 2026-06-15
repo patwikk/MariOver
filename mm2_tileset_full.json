@@ -92,7 +92,7 @@
         "¦" : ["passable", "collectable", "p switch"],
         "¯" : ["passable", "collectable", "pow"],
         "±" : ["passable", "collectable", "spring"],
-        "µ" : ["enemy", "damaging", "hazard", "moving", "shoe"],
+        "µ" : ["enemy", "damaging", "hazard", "moving", "vehicle", "style ride", "goomba's shoe", "yoshi's egg", "yoshi"],
         "]" : ["passable", "collectable", "power-up", "cannon box"],
         "}" : ["passable", "collectable", "power-up", "propeller box"],
         ")" : ["passable", "collectable", "power-up", "goomba mask"],
