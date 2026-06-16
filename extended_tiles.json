@@ -16,10 +16,6 @@
         "´" : ["passable", "platform", "semisolid"],
         "i" : ["passable", "collectable", "power-up", "fire flower"],
         "V" : ["solid", "enemy", "damaging", "hazard", "shooter"],
-        "|" : ["solid", "pipe", "warp"],
-        "↑" : ["solid", "pipe", "pipe direction up"],
-        "↓" : ["solid", "pipe", "pipe direction down"],
-        "←" : ["solid", "pipe", "pipe direction left"],
-        "→" : ["solid", "pipe", "pipe direction right"]
+        "|" : ["solid", "pipe", "warp"]
     }
 }

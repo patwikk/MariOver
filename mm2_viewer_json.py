@@ -172,7 +172,7 @@ OBJ_META = {
     "Twister":             ("Ê", "#AADDFF", CAT_HAZARD),
     "Icicle":              ("Ë", "#AADDFF", CAT_HAZARD),
     # deco
-    "Cloud":               ("Ì", "#CCCCFF", CAT_DECO),
+    "Cloud":               ("Ì", "#CCCCFF", CAT_TERRAIN),
     "Vine":                ("Í", "#00BB00", CAT_DECO),
     "Water Marker":        ("Î", "#0055FF", CAT_DECO),
     "Arrow":               ("Ï", "#FFFF00", CAT_DECO),
@@ -600,16 +600,7 @@ class MM2Viewer(tk.Tk):
             lvl["objects"] = objects
             return
 
-        # 2. Starting structure — C++ draws at col 1, 3 wide, 3 tall at start_y.
-        # Left-anchor convention: x = col*160 + 80.
         start_y = lvl.get("start_y", 0)
-        objects.append({
-            "name": "Starting Brick",
-            "x": 1 * 160 + 80,
-            "y": start_y * 160,
-            "w": 3,
-            "h": 3,
-        })
 
         for col in range(0, 7):
             for row in range(0, start_y):
@@ -639,15 +630,6 @@ class MM2Viewer(tk.Tk):
                 "w": 2,
                 "h": 4,
             })
-            # Castle bridge: 14 tiles extending left up to the axe
-            for i in range(14):
-                objects.append({
-                    "name": "Castle Bridge",
-                    "x": (goal_col - 14 + i) * 160,
-                    "y": (goal_y * 160) - 1,
-                    "w": 1,
-                    "h": 1,
-                })
         else:
             # Flagpole: 1 wide × 11 tall
             objects.append({
@@ -1156,8 +1138,8 @@ class MM2Viewer(tk.Tk):
                 if _pass_for(obj_name) != pass_n:
                     continue
                 char, _, _ = get_meta(resolve_obj_name(obj_name, lvl.get("gamestyle_raw", 0)))
-                if obj_name == "Pipe":
-                    char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag", 0)), char)
+                if obj_name == "Lakitu's Cloud":
+                    char, _, _ = get_meta("Koopa Clown Car")
                 elif obj_name in _SLOPE_NAMES:
                     right_slope = (obj.get("flag", 0) & 0x100000) != 0
                     char = "/" if right_slope else "\\"

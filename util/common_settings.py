@@ -8,10 +8,10 @@ MARIO_HEIGHT = 20
 MARIO_WIDTH = 20
 
 MARIO_TILE_PIXEL_DIM = 16
-MARIO_TILE_COUNT = 23
+MARIO_TILE_COUNT = 17
 
 MARIO_TILESET = 'extended_tiles.json'
 
-MM_EXTENDED_TILE_COUNT = 23  # 22 tiles in extended_tiles.json + 1 extra/padding tile
+MM_EXTENDED_TILE_COUNT = 17
 MM_EXTENDED_TILESET = 'extended_tiles.json'
 

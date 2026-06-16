@@ -24,7 +24,7 @@ python train_mlm.py --epochs 300 --save_checkpoints --json datasets\%GAME%_Level
 python train_diffusion.py --game %GAME% --save_image_epochs 1000 --augment --text_conditional --output_dir "%DIFF_OUTPUT%" --num_epochs 500 --json datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --pkl datasets\%GAME%_Tokenizer-%TYPE%.pkl --mlm_model_dir %MLM_OUTPUT% --seed %SEED% < "%YES_FILE%"
 call bat\run_diffusion_multi.bat %DIFF_OUTPUT% %TYPE% %GAME%
 call bat\evaluate_caption_adherence_multi.bat %DIFF_OUTPUT% %TYPE% %GAME%
-python evaluate_tile_distribution.py --model_path %DIFF_OUTPUT% --num_tiles 23 --tileset extended_tiles.json
+python evaluate_tile_distribution.py --model_path %DIFF_OUTPUT% --num_tiles 17 --tileset extended_tiles.json
 
 
 

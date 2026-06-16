@@ -17,10 +17,6 @@
         "i" : ["passable", "collectable", "power-up", "fire flower"],
         "V" : ["solid", "enemy", "damaging", "hazard", "shooter", "bullet bill blaster"],
         "|" : ["solid", "pipe", "warp"],
-        "↑" : ["solid", "pipe", "pipe direction up"],
-        "↓" : ["solid", "pipe", "pipe direction down"],
-        "←" : ["solid", "pipe", "pipe direction left"],
-        "→" : ["solid", "pipe", "pipe direction right"],
 
         "H" : ["solid", "hard block"],
         "h" : ["passable", "hidden block"],
@@ -29,11 +25,8 @@
         "p" : ["solid", "togglable", "p block"],
         "O" : ["solid", "togglable", "on off block"],
         "." : ["passable", "togglable", "dotted line block"],
-        "{" : ["solid", "starting brick"],
-        "=" : ["solid", "castle bridge"],
 
         "D" : ["passable", "door", "warp"],
-        "k" : ["passable", "collectable", "key"],
         "f" : ["passable", "checkpoint flag"],
         "G" : ["passable", "goal", "flagpole"],
 
@@ -42,7 +35,6 @@
         "s" : ["enemy", "damaging", "hazard", "moving", "spiny"],
         "b" : ["enemy", "damaging", "hazard", "moving", "buzzy beetle"],
         "L" : ["enemy", "damaging", "hazard", "moving", "flying", "lakitu"],
-        "l" : ["passable", "lakitu cloud"],
         "Z" : ["enemy", "damaging", "hazard", "moving", "projectile", "banzai bill"],
         "y" : ["enemy", "damaging", "hazard", "moving", "flying", "magikoopa"],
         "u" : ["enemy", "damaging", "hazard", "moving", "boo"],
@@ -61,7 +53,6 @@
         "9" : ["enemy", "damaging", "hazard", "moving", "dry bones"],
         "A" : ["enemy", "damaging", "hazard", "moving", "angry sun"],
 
-        "$" : ["passable", "collectable", "coin", "red coin"],
         "£" : ["passable", "collectable", "coin", "big coin"],
         "U" : ["passable", "collectable", "power-up", "one up"],
         "¤" : ["passable", "collectable", "power-up", "star"],
@@ -83,17 +74,11 @@
         "È" : ["passable", "damaging", "hazard", "moving", "spike ball"],
         "É" : ["solid", "damaging", "hazard", "moving", "skewer"],
         "Ê" : ["passable", "damaging", "hazard", "moving", "twister"],
-        "Ë" : ["solid", "damaging", "hazard", "icicle"],
 
-        "Ì" : ["passable", "decoration", "cloud"],
+        "Ì" : ["solid", "platform", "cloud block"],
         "Í" : ["passable", "interactive", "climbable", "vine"],
-        "Î" : ["passable", "decoration", "water marker"],
-        "Ï" : ["passable", "decoration", "arrow"],
         "Ð" : ["passable", "platform", "one way"],
-        "Ó" : ["passable", "spawn", "player"],
         "Ô" : ["passable", "vehicle", "clown car"],
-        "Õ" : ["passable", "vehicle", "koopa car"],
-        "×" : ["passable", "decoration", "starting arrow"],
         "Ø" : ["solid", "hazard", "shooter", "cannon"]
     }
 }
