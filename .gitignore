@@ -17,3 +17,5 @@ run.sh
 /EXTENDED_TEST
 /MM-*
 decode_swe.py
+/kLevels
+/marioLevels
