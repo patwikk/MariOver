@@ -203,7 +203,7 @@ OBJ_ID_MAP = {
     42:  "obj_clown_res",           # Clown Car
     43:  "obj_pinchos_res",         # Spike Trap
     44:  "obj_mushroom_res",        # Big Mushroom (approx; see scl)
-    45:  None,                      # Goomba's Shoe (no SMMWE equiv)
+    45:  "obj_egg_res",              # Shoe Goomba / Yoshi's Egg -> obj_egg_res (green Yoshi); works for SMB1/SMB3/SMW/NSMBU
     46:  "obj_drybones_res",        # Dry Bones
     # 47 Cannon -> S6 "obj_cannon_res", see build_cannons
     48:  "obj_blooper_res",         # Blooper
@@ -385,6 +385,39 @@ OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 49, 71}  # Mushroom / Semisolid / Half-Collis
 # against "3000209_6 but right.swe": one Thwomp was fully covering a
 # side-by-side ON/OFF Block pair and one sat one tile too low above its pair.
 OBJ_H_ANCHOR_TOP_IDS = {12, 32, 71}
+
+# MM2 flag bit 14 (0x4000) marks enemies given a Super Mushroom (big form).
+# Verified by comparing flag distributions across ~4000 levels: bit 14 is the
+# one bit that appears alongside both goombas AND chain chomps in "big" amounts
+# and is absent from normal baseline (0x6000040). Bit 12 (0x1000) is wings
+# (paragoomba etc.), NOT big — an earlier hypothesis that it was big was wrong.
+# SMMWE represents big form as separate "_b_res" objects rather than scaling.
+# BIG_OBJ_ID_MAP maps the regular SWE ID to its big counterpart; BIG_Y_OFFSET
+# is an extra upward yy shift (in px) to keep the bigger sprite grounded at
+# the same tile row. Verified: goomba=PX (1 tile, 1->2 tile tall), chomp=2*PX
+# (2 tiles, chain anchor rises higher). Unverified enemies default to PX.
+BIG_ENEMY_FLAG = 1 << 14
+BIG_OBJ_ID_MAP = {
+    "obj_goomba_res":    "obj_goomba_b_res",
+    "obj_koopa_res":     "obj_koopa_b_res",
+    "obj_pplant_res":    "obj_pplant_b_res",
+    "obj_hammerbro_res": "obj_hammerbro_b_res",
+    "obj_thwomp_res":    "obj_thwomp_b_res",
+    "obj_spiny_res":     "obj_spiny_b_res",
+    "obj_magikoopa_res": "obj_magikoopa_b_res",
+    "obj_blooper_res":   "obj_blooper_b_res",
+    "obj_rocky_res":     "obj_rocky_b_res",
+    "obj_chomp_res":     "obj_chomp_b_res",
+    "obj_bowser_res":    "obj_bowser_b_res",
+    "obj_boomboom_res":  "obj_boomboom_b_res",
+    "obj_bowserjr_res":  "obj_bowserjr_b_res",
+    "obj_monty_res":     "obj_monty_b_res",
+}
+BIG_Y_OFFSET = {
+    "obj_goomba_res": PX,       # verified: big goomba 1 tile taller
+    "obj_chomp_res":  2 * PX,   # verified: big chomp 2 tiles taller
+}
+_BIG_Y_DEFAULT = PX             # unverified: assume 1 tile taller
 
 # Every key an S4 object dict carries (from a real .swe). All flags default to
 # 0; we only fill ID / xx / yy / scl / dir.
@@ -758,6 +791,9 @@ def build_objects(objects):
         if oid in OBJ_H_ANCHOR_TOP_IDS:
             h = max(1, o.get("h", 1))
             yy -= (h - 1) * PX
+        if o.get("flag", 0) & BIG_ENEMY_FLAG and swe_id in BIG_OBJ_ID_MAP:
+            yy -= BIG_Y_OFFSET.get(swe_id, _BIG_Y_DEFAULT)
+            swe_id = BIG_OBJ_ID_MAP[swe_id]
         entry = dict(S4_TEMPLATE)
         entry.update({
             "ID": swe_id,
