@@ -9,7 +9,7 @@
         "K" : ["enemy", "damaging", "hazard", "moving", "koopa"],
         "P" : ["enemy", "damaging", "hazard", "piranha plant"],
         "t" : ["enemy", "damaging", "hazard", "moving", "thwomp"],
-        "^" : ["solid", "damaging", "hazard", "spike block"],
+        "^" : ["solid", "damaging", "hazard", "spikes"],
         "N" : ["solid", "note block"],
         "T" : ["solid", "platform", "mushroom platform"],
         "=" : ["solid", "platform", "bridge"],
