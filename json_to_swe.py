@@ -317,6 +317,13 @@ SKEWER_CEILING_FLAG = 1 << 23
 SKEWER_DIR = {0: 1, SKEWER_CEILING_FLAG: 3}
 SKEWER_ROT = {1: 0, 3: 180}
 
+# obj_thwomp_res requires dir=1 to aggro (chase) the player. dir=0 (the
+# generic S4 default) produces an inert thwomp that never moves. Verified
+# against "correct thwomps.swe": all three hand-placed thwomps carry dir=1.
+# Flag-based direction (up/left/right variants) is not yet reverse-engineered;
+# dir=1 (face-down, the standard orientation) is used as a constant.
+THWOMP_DIR = 1
+
 # ON/OFF Block (99) / Dotted-Line Block (100) -> SWE S4 "ID", keyed by MM2
 # flag bit 2 (flag & 4), a shared red/blue "color" flag for both ids.
 # Verified exhaustively against "3000209_6 but right.swe": all 73 id-99/100
@@ -360,15 +367,6 @@ OBJ_Y_OFFSET_PX = {
 # col = x // SUBPX - w // 2.
 OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 49, 71}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge
 
-# Thwomp (12, h=2) is top-anchored like the ids below: with the generic
-# bottom-anchored formula its obj_thwomp_res sprite's bottom row lands on the
-# same cell as the object placed one row above it, hiding that object under
-# the Thwomp. Shifting yy up by (h-1)*PX=1 tile fixes both Thwomps in
-# "3000209_6 but right.swe" -- one was fully overlapping a side-by-side
-# ON/OFF Block pair (hiding both blocks under it), the other sat one tile
-# too low above its own pair.
-OBJ_H_ANCHOR_TOP_IDS = OBJ_H_ANCHOR_TOP_IDS | {12}
-
 # MM2 object ids whose `h` (tile height, growing UP from the (x,y) anchor at
 # the bottom row) is not represented by a stretched SWE sprite -- instead the
 # single SWE sprite sits at the TOP of that h-tall span. Without this, these
@@ -382,8 +380,11 @@ OBJ_H_ANCHOR_TOP_IDS = OBJ_H_ANCHOR_TOP_IDS | {12}
 # (13/16/47/14) are no longer routed through this S4 path -- see
 # build_cannons / build_platform_objects, which apply the same (h-1)*PX
 # shift directly.
-#
-OBJ_H_ANCHOR_TOP_IDS = {32, 71}
+# Thwomp (12, h=2): without this, obj_thwomp_res lands on the same row as
+# objects placed one row above it -- hiding them under the sprite. Verified
+# against "3000209_6 but right.swe": one Thwomp was fully covering a
+# side-by-side ON/OFF Block pair and one sat one tile too low above its pair.
+OBJ_H_ANCHOR_TOP_IDS = {12, 32, 71}
 
 # Every key an S4 object dict carries (from a real .swe). All flags default to
 # 0; we only fill ID / xx / yy / scl / dir.
@@ -765,7 +766,9 @@ def build_objects(objects):
             "scl": scl,
             "dir": 0,   # best-effort: MM2 flag bitfields aren't carried over
         })
-        if oid == 83:
+        if oid == 12:
+            entry["dir"] = THWOMP_DIR
+        elif oid == 83:
             # Skewer anchors one column right of and one row above the
             # generic centered-bottom cell (col + w//2, row + 1) -- derived
             # by hand-placing all 4 of this level's skewers correctly in the
@@ -850,7 +853,12 @@ def build_cannons(objects, occ):
     left/right swapped, so dir 0/4 are flipped when that bit is absent.
 
     rht/lft are always 0, per the reference save."""
-    HFLIP_DIR = {0: 4, 4: 0}
+    # dir=3 (right) verified against "300361_2 correct cannon.swe": the
+    # floor-mounted cannon there (bit26=SET, no flip) has dir=3. dir=7 is the
+    # symmetric left counterpart (3+4). dir=6 (ceiling-down) is unchanged.
+    # bit26=CLEAR triggers the flip (left-facing cannons); bit26=SET keeps the
+    # base direction (right-facing). Ceiling-sideways follows the same pair.
+    HFLIP_DIR = {3: 7, 7: 3}
     out = []
     for o in objects:
         if o.get("id") != 47:
@@ -868,11 +876,11 @@ def build_cannons(objects, occ):
             else:
                 wall_left = any((col - 1, row + dy) in occ for dy in range(h))
                 wall_right = any((col + w, row + dy) in occ for dy in range(h))
-                cannon_dir = 4 if (wall_right and not wall_left) else 0
+                cannon_dir = 7 if (wall_right and not wall_left) else 3
             top_row = row + h - 1
         else:
             up, dwn = 0, 1
-            cannon_dir = 0
+            cannon_dir = 3
             top_row = row + h if h > 1 else row
 
         if not (o.get("flag", 0) & (1 << 26)):
