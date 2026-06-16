@@ -141,6 +141,106 @@ HEADER_SIZE       = 0x10      # 16-byte header we skip / zero-pad
 TRAILER_SIZE      = 0x30      # 48-byte trailer: IV(16) + seed(16) + zeros(16)
 PAYLOAD_SIZE      = COURSE_FILE_SIZE - HEADER_SIZE - TRAILER_SIZE  # 0x5BFC0
 
+# Offset of the gamestyle field (s2le) within the decompressed payload,
+# per level.ksy: sum of the fixed header fields before it (52 bytes) plus
+# the 189-byte unk1 padding = 241.
+GAMESTYLE_OFFSET  = 241
+GAMESTYLE_SM3DW   = 22323   # level.ksy enum gamestyle: sm3dw
+
+
+def get_gamestyle_raw(plaintext: bytes) -> int:
+    """Read the raw gamestyle enum value from a decoded level payload."""
+    return struct.unpack_from("<h", plaintext, GAMESTYLE_OFFSET)[0]
+
+
+# ---------------------------------------------------------------------------
+# Object IDs (level.ksy: obj_id enum) and item-based level skipping
+# ---------------------------------------------------------------------------
+
+OBJ_ID = {
+    "goomba": 0, "koopa": 1, "piranha_flower": 2, "hammer_bro": 3,
+    "block": 4, "question_block": 5, "hard_block": 6, "ground": 7,
+    "coin": 8, "pipe": 9, "spring": 10, "lift": 11,
+    "thwomp": 12, "bullet_bill_blaster": 13, "mushroom_platform": 14, "bob_omb": 15,
+    "semisolid_platform": 16, "bridge": 17, "p_switch": 18, "pow": 19,
+    "super_mushroom": 20, "donut_block": 21, "cloud": 22, "note_block": 23,
+    "fire_bar": 24, "spiny": 25, "goal_ground": 26, "goal": 27,
+    "buzzy_beetle": 28, "hidden_block": 29, "lakitu": 30, "lakitu_cloud": 31,
+    "banzai_bill": 32, "one_up": 33, "fire_flower": 34, "super_star": 35,
+    "lava_lift": 36, "starting_brick": 37, "starting_arrow": 38, "magikoopa": 39,
+    "spike_top": 40, "boo": 41, "clown_car": 42, "spikes": 43,
+    "big_mushroom": 44, "shoe_goomba": 45, "dry_bones": 46, "cannon": 47,
+    "blooper": 48, "castle_bridge": 49, "jumping_machine": 50, "skipsqueak": 51,
+    "wiggler": 52, "fast_conveyor_belt": 53, "burner": 54, "door": 55,
+    "cheep_cheep": 56, "muncher": 57, "rocky_wrench": 58, "track": 59,
+    "lava_bubble": 60, "chain_chomp": 61, "bowser": 62, "ice_block": 63,
+    "vine": 64, "stingby": 65, "arrow": 66, "one_way": 67,
+    "saw": 68, "player": 69, "big_coin": 70, "half_collision_platform": 71,
+    "koopa_car": 72, "cinobio": 73, "spike_ball": 74, "stone": 75,
+    "twister": 76, "boom_boom": 77, "pokey": 78, "p_block": 79,
+    "sprint_platform": 80, "smb2_mushroom": 81, "donut": 82, "skewer": 83,
+    "snake_block": 84, "track_block": 85, "charvaargh": 86, "slight_slope": 87,
+    "steep_slope": 88, "reel_camera": 89, "checkpoint_flag": 90, "seesaw": 91,
+    "red_coin": 92, "clear_pipe": 93, "conveyor_belt": 94, "key": 95,
+    "ant_trooper": 96, "warp_box": 97, "bowser_jr": 98, "on_off_block": 99,
+    "dotted_line_block": 100, "water_marker": 101, "monty_mole": 102, "fish_bone": 103,
+    "angry_sun": 104, "swinging_claw": 105, "tree": 106, "piranha_creeper": 107,
+    "blinking_block": 108, "sound_effect": 109, "spike_block": 110, "mechakoopa": 111,
+    "crate": 112, "mushroom_trampoline": 113, "porkupuffer": 114, "cinobic": 115,
+    "super_hammer": 116, "bully": 117, "icicle": 118, "exclamation_block": 119,
+    "lemmy": 120, "morton": 121, "larry": 122, "wendy": 123,
+    "iggy": 124, "roy": 125, "ludwig": 126, "cannon_box": 127,
+    "propeller_box": 128, "goomba_mask": 129, "bullet_bill_mask": 130, "red_pow_box": 131,
+    "on_off_trampoline": 132,
+}
+
+# Object names that, if present anywhere in a level (overworld or subworld),
+# cause that level to be skipped during extraction, the same way 3D World
+# levels are skipped. Add more names from OBJ_ID above as needed.
+SKIP_ITEM_NAMES = [
+    "smb2_mushroom",
+    "fast_conveyor_belt",
+    "conveyor_belt",
+    "track",
+    "track_block",
+    "snake_block",
+]
+
+SKIP_OBJECT_IDS = {OBJ_ID[name] for name in SKIP_ITEM_NAMES}
+
+# Layout of the "map" (overworld/subworld) structure within the decoded
+# payload, derived from level.ksy.
+OVERWORLD_OFFSET     = 512      # start of the overworld map
+MAP_OBJECT_COUNT_OFF = 28        # s4 object_count, relative to map start
+MAP_OBJECTS_OFF      = 72        # start of the fixed-size objects array
+MAP_OBJ_ENTRY_SIZE   = 32        # bytes per `obj` entry
+MAP_OBJ_ID_OFF       = 24        # offset of `id` (s2) within an obj entry
+MAP_MAX_OBJECTS      = 2600      # fixed array length (level.ksy)
+MAP_SIZE             = 188128    # total size of one map (overworld/subworld)
+SUBWORLD_OFFSET      = OVERWORLD_OFFSET + MAP_SIZE
+
+
+def _map_object_ids(plaintext: bytes, map_offset: int):
+    """Yield every object id present in the map (overworld/subworld) starting
+    at map_offset within the decoded payload."""
+    object_count = struct.unpack_from("<i", plaintext, map_offset + MAP_OBJECT_COUNT_OFF)[0]
+    object_count = max(0, min(object_count, MAP_MAX_OBJECTS))
+    base = map_offset + MAP_OBJECTS_OFF
+    for i in range(object_count):
+        yield struct.unpack_from("<h", plaintext, base + i * MAP_OBJ_ENTRY_SIZE + MAP_OBJ_ID_OFF)[0]
+
+
+def level_contains_skip_object(plaintext: bytes) -> bool:
+    """Return True if the level's overworld or subworld contains any object
+    whose id is in SKIP_OBJECT_IDS."""
+    if not SKIP_OBJECT_IDS:
+        return False
+    for map_offset in (OVERWORLD_OFFSET, SUBWORLD_OFFSET):
+        for obj_id in _map_object_ids(plaintext, map_offset):
+            if obj_id in SKIP_OBJECT_IDS:
+                return True
+    return False
+
 
 def build_bcd(plaintext: bytes) -> bytes:
     """
@@ -209,6 +309,8 @@ def extract_levels(
     data_id_filter=None,
     name_filter=None,
     name_count=None,
+    skip_3dworld: bool = False,
+    skip_items: bool = False,
 ):
     from datasets import load_dataset
 
@@ -219,6 +321,8 @@ def extract_levels(
     ds = load_dataset("TheGreatRambler/mm2_level", streaming=streaming, split="train")
 
     saved = skipped = errors = 0
+    skipped_3dw = 0
+    skipped_items = 0
     name_saved = 0
 
     for row in ds:
@@ -229,9 +333,8 @@ def extract_levels(
         
         if name_filter is not None:
             level_name = str(row.get("name", ""))
-
-        if name_filter.lower() not in level_name.lower():
-            continue
+            if name_filter.lower() not in level_name.lower():
+                continue
 
         raw = row["level_data"]
         if raw is None:
@@ -248,6 +351,16 @@ def extract_levels(
         if len(plaintext) != PAYLOAD_SIZE:
             print(f"  [WARN] data_id={data_id}: unexpected size {len(plaintext)}, skipping")
             errors += 1
+            continue
+
+        if skip_3dworld and get_gamestyle_raw(plaintext) == GAMESTYLE_SM3DW:
+            print(f"  [SKIP] data_id={data_id}: skipped because level is 3D World")
+            skipped_3dw += 1
+            continue
+
+        if skip_items and level_contains_skip_object(plaintext):
+            print(f"  [SKIP] data_id={data_id}: skipped because level contains a banned item")
+            skipped_items += 1
             continue
 
         try:
@@ -277,7 +390,9 @@ def extract_levels(
             break
 
     print(
-        f"\nDone. Saved: {saved}  |  Skipped (null): {skipped}  |  Errors: {errors}"
+        f"\nDone. Saved: {saved}  |  Skipped (null): {skipped}  |  "
+        f"Skipped (3D World): {skipped_3dw}  |  Skipped (banned item): {skipped_items}  |  "
+        f"Errors: {errors}"
     )
     print(f"Output dir: {out.resolve()}")
 
@@ -302,6 +417,11 @@ def parse_args():
                    metavar="DATA_ID", help="Only extract these data_ids")
     p.add_argument("--name", type=str, default=None, help="Extract levels whose name contains this text")
     p.add_argument("--name_count", type=int, default=None, help="Number of matching levels to extract")
+    p.add_argument("--skip_3dworld", action="store_true",
+                   help="Skip levels whose gamestyle is Super Mario 3D World")
+    p.add_argument("--skip_items", action="store_true",
+                   help="Skip levels containing any object listed in SKIP_ITEM_NAMES "
+                        "(default: SMB2 Mushroom)")
     return p.parse_args()
 
 # python extract_mm2_bcd.py --name "mario" --name_count 25
@@ -315,4 +435,6 @@ if __name__ == "__main__":
         data_id_filter=set(args.ids) if args.ids else None,
         name_filter=args.name,
         name_count=args.name_count,
-    )   
+        skip_3dworld=args.skip_3dworld,
+        skip_items=args.skip_items,
+    )

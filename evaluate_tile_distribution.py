@@ -19,7 +19,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Evaluate tile type distribution across model checkpoints"
     )
-    parser.add_argument("--model_path", type=str, required=True, help="Path to the trained model directory")
+    parser.add_argument("--model_path", type=str, default=None, help="Path to the trained model directory")
+    parser.add_argument("--json_path", type=str, default=None, help="Path to a single dataset JSON file. Used alone to evaluate tile distribution for that dataset, or together with --epoch_dir as the training-set baseline for the comparison plot.")
+    parser.add_argument("--epoch_dir", type=str, default=None, help="Path to a single trained checkpoint/epoch directory (e.g. a 'checkpoint-N' folder or final model dir). Generates samples from this checkpoint and compares their tile distribution and scene presence against --json_path, saving bar-chart visualizations of the difference.")
     parser.add_argument("--num_samples", type=int, default=100, help="Number of levels to generate per checkpoint")
     parser.add_argument("--batch_size", type=int, default=25, help="Batch size for generation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
@@ -29,8 +31,19 @@ def parse_args():
     parser.add_argument("--height", type=int, default=common_settings.MARIO_HEIGHT, help="Height of generated levels")
     parser.add_argument("--inference_steps", type=int, default=common_settings.NUM_INFERENCE_STEPS, help="Denoising steps")
     parser.add_argument("--guidance_scale", type=float, default=common_settings.GUIDANCE_SCALE, help="Classifier-free guidance scale")
-    parser.add_argument("--caption", type=str, default="", help="Caption for conditional models (empty = unconditioned)")
-    return parser.parse_args()
+    parser.add_argument("--captions_json", type=str, default=None, help="Path to a dataset JSON file (list of {\"caption\": ...} entries). If given, a fixed set of captions sampled from it is used to condition generation for every checkpoint, instead of generating unconditionally.")
+    args = parser.parse_args()
+
+    if not args.model_path and not args.json_path and not args.epoch_dir:
+        parser.error("Provide --model_path, --json_path, or --epoch_dir (with --json_path).")
+    if args.model_path and args.epoch_dir:
+        parser.error("Provide only one of --model_path or --epoch_dir, not both.")
+    if args.model_path and args.json_path:
+        parser.error("Provide only one of --model_path or --json_path, not both.")
+    if args.epoch_dir and not args.json_path:
+        parser.error("--epoch_dir requires --json_path (the training dataset to compare against).")
+
+    return args
 
 
 # Authoritative MM2 char→name mapping sourced from OBJ_META in mm2_viewer_json.py.
@@ -146,8 +159,12 @@ def build_char_to_name(tileset_path):
     return char_to_name
 
 
-def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_scale, seed, height, width, caption=""):
-    """Generate num_samples levels, returning a list of 2D tile-index scenes."""
+def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_scale, seed, height, width, captions=None):
+    """Generate num_samples levels, returning a list of 2D tile-index scenes.
+
+    If `captions` is given (a list of length num_samples), sample i is generated
+    conditioned on captions[i]. Otherwise generation is unconditional.
+    """
     is_unconditional = isinstance(pipe, UnconditionalDDPMPipeline)
     is_fdm = isinstance(pipe, FDMPipeline)
 
@@ -158,14 +175,16 @@ def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_sc
 
     all_scenes = []
     remaining = num_samples
+    offset = 0
 
     while remaining > 0:
         current_batch = min(batch_size, remaining)
         generator = torch.Generator(device).manual_seed(seed)
+        batch_captions = captions[offset:offset + current_batch] if captions is not None else None
 
         with torch.no_grad():
             if is_fdm:
-                param_values = {"caption": [caption] * current_batch, "batch_size": current_batch}
+                param_values = {"caption": batch_captions if batch_captions is not None else [""] * current_batch, "batch_size": current_batch}
             elif is_unconditional:
                 param_values = {
                     "num_inference_steps": inference_steps,
@@ -174,12 +193,13 @@ def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_sc
                 }
             else:
                 param_values = {
-                    "caption": [caption] * current_batch,
                     "num_inference_steps": inference_steps,
                     "height": height, "width": width,
                     "guidance_scale": guidance_scale,
                     "output_type": "tensor", "batch_size": current_batch,
                 }
+                if batch_captions is not None:
+                    param_values["caption"] = batch_captions
 
             samples = pipe(generator=generator, **param_values).images
 
@@ -189,6 +209,7 @@ def generate_samples(pipe, num_samples, batch_size, inference_steps, guidance_sc
             all_scenes.append(scene)
 
         remaining -= current_batch
+        offset += current_batch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -221,6 +242,95 @@ def count_scene_presence(scenes, id_to_char, char_to_name):
         for name in present:
             counts[name] += 1
     return dict(counts)
+
+
+def compute_distribution_stats(scenes, id_to_char, char_to_name):
+    """Compute tile-count and scene-presence stats (raw counts and percentages)
+    for a list of scenes."""
+    counts = count_tiles(scenes, id_to_char, char_to_name)
+    total = sum(counts.values())
+
+    presence_counts = count_scene_presence(scenes, id_to_char, char_to_name)
+    num_scenes = len(scenes)
+
+    return {
+        "num_scenes": num_scenes,
+        "total_tiles": total,
+        "tile_counts": counts,
+        "tile_percentages": {n: 100.0 * c / total for n, c in counts.items()} if total else {},
+        "scene_presence_counts": presence_counts,
+        "scene_presence_percentages": {
+            n: 100.0 * c / num_scenes for n, c in presence_counts.items()
+        } if num_scenes else {},
+    }
+
+
+def load_captions_from_json(json_path):
+    """Load caption strings from a dataset JSON file (list of dicts with a 'caption' key)."""
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return [entry["caption"] for entry in data if isinstance(entry, dict) and "caption" in entry]
+
+
+def load_scenes_from_json(json_path):
+    """Load scenes from a dataset JSON file: a list of {"scene": [[...]], ...}
+    entries, or a list of raw 2D scenes."""
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    scenes = []
+    for item in data:
+        scenes.append(item["scene"] if isinstance(item, dict) else item)
+    return scenes
+
+
+def evaluate_json_dataset(json_path, id_to_char, char_to_name, tile_names):
+    """Evaluate tile distribution and scene presence for a single dataset JSON
+    file, writing the results to a single summary JSON file."""
+    if not os.path.exists(json_path):
+        print(f"Error: JSON file '{json_path}' does not exist.")
+        return
+
+    scenes = load_scenes_from_json(json_path)
+    if not scenes:
+        print(f"No scenes found in {json_path}")
+        return
+
+    stats = compute_distribution_stats(scenes, id_to_char, char_to_name)
+    counts = stats["tile_counts"]
+    total = stats["total_tiles"]
+    presence_counts = stats["scene_presence_counts"]
+    num_scenes = stats["num_scenes"]
+
+    present_tiles = sorted(
+        (n for n in tile_names if counts.get(n, 0) > 0),
+        key=lambda n: -counts[n],
+    )
+
+    result = {
+        "source": json_path,
+        "num_scenes": num_scenes,
+        "total_tiles": total,
+        "tile_counts": {n: counts[n] for n in present_tiles},
+        "tile_percentages": {n: round(stats["tile_percentages"][n], 2) for n in present_tiles} if total else {},
+        "scene_presence_counts": {n: presence_counts.get(n, 0) for n in present_tiles},
+        "scene_presence_percentages": {
+            n: round(stats["scene_presence_percentages"].get(n, 0.0), 2) for n in present_tiles
+        } if num_scenes else {},
+    }
+
+    base, _ = os.path.splitext(json_path)
+    out_path = f"{base}_tile_distribution.json"
+    with open(out_path, 'w') as f:
+        json.dump(result, f, indent=2)
+
+    summary = "  ".join(
+        f"{n}={counts[n]} ({result['tile_percentages'][n]:.1f}%)"
+        for n in present_tiles
+    )
+    print(f"\n{json_path} - Tile Distribution ({num_scenes} samples, {total} tiles)")
+    print(f"  {summary}")
+    print(f"\nDone. Results saved to: {out_path}")
 
 
 def write_distribution(path, header, counts, total, tile_names):
@@ -274,6 +384,151 @@ def plot_scene_presence(history, tile_names, out_path):
     plt.close(fig)
 
 
+def plot_comparison_bars(tile_names, model_values, dataset_values, title, ylabel, out_path):
+    """Grouped bar chart with two bars per tile: one for the model output and
+    one for the training dataset, side by side."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    if not tile_names:
+        return
+
+    model_bars = [model_values.get(n, 0.0) for n in tile_names]
+    dataset_bars = [dataset_values.get(n, 0.0) for n in tile_names]
+
+    x = np.arange(len(tile_names))
+    width = 0.4
+
+    fig, ax = plt.subplots(figsize=(max(12, len(tile_names) * 0.5), 7))
+    ax.bar(x - width / 2, model_bars, width, label='Model output', color='tab:blue')
+    ax.bar(x + width / 2, dataset_bars, width, label='Training dataset', color='tab:orange')
+    ax.set_xticks(x)
+    ax.set_xticklabels(tile_names, rotation=90, fontsize='small')
+    ax.set_xlim(-0.5, len(tile_names) - 0.5)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches='tight')
+    plt.close(fig)
+
+
+def evaluate_epoch_vs_dataset(epoch_dir, json_path, id_to_char, char_to_name, tile_names, args, device):
+    """Compare a single trained checkpoint's generated-sample tile distribution
+    and scene presence against the training dataset's distribution, saving
+    grouped bar charts (model vs. dataset, side by side per tile) for both
+    metrics."""
+    if not os.path.isdir(epoch_dir):
+        print(f"Error: epoch directory '{epoch_dir}' does not exist.")
+        return
+    if not os.path.exists(json_path):
+        print(f"Error: JSON file '{json_path}' does not exist.")
+        return
+
+    dataset_scenes = load_scenes_from_json(json_path)
+    if not dataset_scenes:
+        print(f"No scenes found in {json_path}")
+        return
+    dataset_stats = compute_distribution_stats(dataset_scenes, id_to_char, char_to_name)
+
+    fixed_captions = None
+    if args.captions_json:
+        captions_pool = load_captions_from_json(args.captions_json)
+        if captions_pool:
+            if len(captions_pool) >= args.num_samples:
+                fixed_captions = random.sample(captions_pool, args.num_samples)
+            else:
+                fixed_captions = random.choices(captions_pool, k=args.num_samples)
+            print(f"Using {args.num_samples} fixed captions sampled from {args.captions_json}")
+
+    print(f"Loading model from {epoch_dir}")
+    pipe = get_pipeline(epoch_dir).to(device)
+    model_type = "unconditional" if isinstance(pipe, UnconditionalDDPMPipeline) else "conditional"
+    print(f"  Model type: {model_type}")
+
+    model_scenes = generate_samples(
+        pipe,
+        num_samples=args.num_samples,
+        batch_size=args.batch_size,
+        inference_steps=args.inference_steps,
+        guidance_scale=args.guidance_scale,
+        seed=args.seed,
+        height=args.height,
+        width=args.width,
+        captions=fixed_captions,
+    )
+    del pipe
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    model_stats = compute_distribution_stats(model_scenes, id_to_char, char_to_name)
+
+    # Order tiles left-to-right by descending training-set frequency, then any
+    # tiles that only appear in the model output by descending model frequency.
+    ordered = sorted(
+        (n for n in tile_names if dataset_stats["tile_counts"].get(n, 0) > 0),
+        key=lambda n: -dataset_stats["tile_counts"][n],
+    )
+    leftover = sorted(
+        (n for n in tile_names if n not in ordered and model_stats["tile_counts"].get(n, 0) > 0),
+        key=lambda n: -model_stats["tile_counts"][n],
+    )
+    ordered += leftover
+    if not ordered:
+        print("No tiles found in either the dataset or the generated samples.")
+        return
+
+    out_dir = os.path.join(epoch_dir, "dataset_comparison")
+    os.makedirs(out_dir, exist_ok=True)
+
+    subtitle = f"({model_stats['num_scenes']} generated samples vs {dataset_stats['num_scenes']} dataset scenes)"
+
+    dist_plot_path = os.path.join(out_dir, "distribution_diff.png")
+    plot_comparison_bars(
+        ordered,
+        model_stats["tile_percentages"], dataset_stats["tile_percentages"],
+        title=f"Tile Distribution: Model Output vs Training Dataset\n{subtitle}",
+        ylabel="Model % - Dataset % (tile occurrences)",
+        out_path=dist_plot_path,
+    )
+
+    presence_plot_path = os.path.join(out_dir, "presence_diff.png")
+    plot_comparison_bars(
+        ordered,
+        model_stats["scene_presence_percentages"], dataset_stats["scene_presence_percentages"],
+        title=f"Scene Presence: Model Output vs Training Dataset\n{subtitle}",
+        ylabel="Model % - Dataset % (scenes containing tile)",
+        out_path=presence_plot_path,
+    )
+
+    summary = {
+        "epoch_dir": epoch_dir,
+        "dataset_source": json_path,
+        "model": {
+            "num_scenes": model_stats["num_scenes"],
+            "total_tiles": model_stats["total_tiles"],
+            "tile_counts": model_stats["tile_counts"],
+            "tile_percentages": {n: round(v, 2) for n, v in model_stats["tile_percentages"].items()},
+            "scene_presence_counts": model_stats["scene_presence_counts"],
+            "scene_presence_percentages": {n: round(v, 2) for n, v in model_stats["scene_presence_percentages"].items()},
+        },
+        "dataset": {
+            "num_scenes": dataset_stats["num_scenes"],
+            "total_tiles": dataset_stats["total_tiles"],
+            "tile_counts": dataset_stats["tile_counts"],
+            "tile_percentages": {n: round(v, 2) for n, v in dataset_stats["tile_percentages"].items()},
+            "scene_presence_counts": dataset_stats["scene_presence_counts"],
+            "scene_presence_percentages": {n: round(v, 2) for n, v in dataset_stats["scene_presence_percentages"].items()},
+        },
+    }
+    summary_path = os.path.join(out_dir, "comparison_summary.json")
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"\nDone. Comparison saved to: {out_dir}")
+
+
 def collect_checkpoint_dirs(model_path):
     checkpoint_dirs = [
         (int(d.split("-")[-1]), os.path.join(model_path, d))
@@ -324,6 +579,27 @@ def main():
             seen.add(name)
             tile_names.append(name)
 
+    if args.epoch_dir:
+        evaluate_epoch_vs_dataset(args.epoch_dir, args.json_path, id_to_char, char_to_name, tile_names, args, device)
+        return
+
+    if args.json_path:
+        evaluate_json_dataset(args.json_path, id_to_char, char_to_name, tile_names)
+        return
+
+    fixed_captions = None
+    if args.captions_json:
+        captions_pool = load_captions_from_json(args.captions_json)
+        if not captions_pool:
+            print(f"No captions found in {args.captions_json}")
+            return
+        if len(captions_pool) >= args.num_samples:
+            fixed_captions = random.sample(captions_pool, args.num_samples)
+        else:
+            fixed_captions = random.choices(captions_pool, k=args.num_samples)
+        print(f"Using {args.num_samples} fixed captions sampled from {args.captions_json} "
+              f"(pool of {len(captions_pool)}) for every checkpoint")
+
     checkpoint_dirs = collect_checkpoint_dirs(args.model_path)
     if not checkpoint_dirs:
         print(f"No checkpoints found in {args.model_path}")
@@ -365,7 +641,7 @@ def main():
                 seed=args.seed,
                 height=args.height,
                 width=args.width,
-                caption=args.caption,
+                captions=fixed_captions,
             )
 
             counts = count_tiles(scenes, id_to_char, char_to_name)

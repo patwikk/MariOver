@@ -102,6 +102,11 @@ def pack_str_utf16(s, size_bytes):
     return raw.ljust(size_bytes, b"\x00")
 
 
+def _snap_to_tile_anchor(value, offset=80, tile=160):
+    """Round `value` to the nearest grid position satisfying value % tile == offset."""
+    return (value - offset + tile // 2) // tile * tile + offset
+
+
 # ---------------------------------------------------------------------------
 # Level header (512 bytes)
 # ---------------------------------------------------------------------------
@@ -131,6 +136,12 @@ def pack_level_header(j):
         # toost reads a wildly out-of-range goal column and crashes, with
         # or without --toost-compat.)
         goal_x = (goal_x // 160) * 10
+
+    # goal_x should sit on the tile-CENTER grid (goal_x % 10 == 5, i.e.
+    # col*10 + 5), per bcd_levels/json/*_overworld.json. Some generators
+    # land exactly on a tile boundary (goal_x % 10 == 0) instead; snap to
+    # the nearest tile-center column.
+    goal_x = _snap_to_tile_anchor(goal_x, offset=5, tile=10)
 
     fixed = struct.pack(
         "<BBhhhhbbbbBBiiiiiIqi",
@@ -272,6 +283,45 @@ def _pack_array(items, max_count, size, pack_fn, label):
     return bytes(out)
 
 
+# Object ids that are left-anchored (x = left_col*160 + 80, regardless of
+# width) rather than center-of-span. Generated instances of these often land
+# at arbitrary, non-grid-aligned x/y; _fix_object_anchors force-snaps both
+# axes onto the nearest valid tile anchor instead of using the odd-width
+# naive/real shift.
+LEFT_ANCHOR_OBJ_IDS = {
+    9,   # Pipe
+    27,  # Goal
+}
+
+# Object ids that are placed as a single 1x1 tile in SMM2 (no in-editor
+# resize handle). A generator emitting one of these with w>1 and/or h>1
+# really means a stack/row of that many individual blocks; see
+# _fix_extended_objects.
+ATOMIC_BLOCK_IDS = {
+    4,    # Block
+    5,    # ? Block
+    6,    # Hard Block
+    21,   # Donut Block
+    23,   # Note Block
+    29,   # Hidden Block
+    63,   # Ice Block
+    79,   # P Block
+    99,   # ON/OFF Block
+    100,  # Dotted-Line Block
+    108,  # Blinking Block
+    110,  # Spike Block
+}
+
+# Object ids for "stretchy" platform sprites whose w/h directly describe
+# their on-screen footprint: Mushroom Platform draws a centered "stem" for
+# the lower h-1 rows plus a full-width "cap" at the top row, while
+# Semisolid / Half-Collision Platform fill their entire w x h footprint (see
+# build_ascii_grid in mm2_json_to_ascii.py). SMM2 won't place any of these
+# smaller than 3x3; see _fix_platform_objects.
+PLATFORM_FILL_IDS = {14, 16, 71}  # Mushroom / Semisolid / Half-Collision Platform
+PLATFORM_MIN_SIZE = 3
+
+
 def _fix_object_anchors(objects, label="map"):
     """Real .bcd objects store x/y as the CENTER of their tile footprint:
         x = (left_col + w/2) * 160   (x % 160 == 80 for odd w, == 0 for even w)
@@ -287,14 +337,29 @@ def _fix_object_anchors(objects, label="map"):
 
     Detect the naive X convention from odd-width objects (where naive vs.
     real differ mod 160) and correct both axes.
+
+    LEFT_ANCHOR_OBJ_IDS (Pipe, Goal) are excluded from the above: they're
+    left-anchored rather than center-of-span, so the odd-width naive/real
+    shift doesn't apply to them. Generated instances of these often land at
+    arbitrary, non-grid-aligned x/y ("floating" mid-tile); force-snap both
+    axes onto the nearest valid tile anchor instead.
     """
-    odd_w = [o for o in objects if o.get("w", 1) % 2 == 1]
+    odd_w = [o for o in objects if o.get("id") not in LEFT_ANCHOR_OBJ_IDS and o.get("w", 1) % 2 == 1]
     x_naive = bool(odd_w) and sum(1 for o in odd_w if o.get("x", 0) % 160 == 0) > len(odd_w) // 2
 
     fixed = []
-    n_x = n_y = 0
+    n_x = n_y = n_left = 0
     for o in objects:
         o = dict(o)
+        if o.get("id") in LEFT_ANCHOR_OBJ_IDS:
+            new_x = _snap_to_tile_anchor(o.get("x", 0))
+            new_y = _snap_to_tile_anchor(o.get("y", 0))
+            if new_x != o.get("x", 0) or new_y != o.get("y", 0):
+                o["x"], o["y"] = new_x, new_y
+                n_left += 1
+            fixed.append(o)
+            continue
+
         if x_naive:
             o["x"] = o.get("x", 0) + o.get("w", 1) * 80
             n_x += 1
@@ -303,15 +368,153 @@ def _fix_object_anchors(objects, label="map"):
             n_y += 1
         fixed.append(o)
 
-    if n_x or n_y:
-        print(f"  [{label}] toost-anchor fix: shifted {n_x} object(s) on X, "
-              f"{n_y} object(s) on Y onto toost's tile-center grid")
+    if n_x or n_y or n_left:
+        msg = (f"  [{label}] toost-anchor fix: shifted {n_x} object(s) on X, "
+               f"{n_y} object(s) on Y onto toost's tile-center grid")
+        if n_left:
+            msg += f"; snapped {n_left} pipe/goal object(s) onto the tile grid"
+        print(msg)
+    return fixed
+
+
+def _fix_extended_objects(objects, label="map"):
+    """Split any ATOMIC_BLOCK_IDS object with w>1 and/or h>1 into a grid of
+    1x1 objects of the same id, one per tile of its footprint.
+
+    Some generators emit e.g. a single Hard Block object with w=1, h=4
+    instead of 4 separate 1x1 Hard Blocks stacked vertically. toost then
+    draws ONE sprite stretched over the whole footprint ("extended") instead
+    of a stack of distinct blocks. Assumes x/y have already been normalized
+    by _fix_object_anchors (x = (left_col + w/2)*160, y = bottom_row*160+80).
+    """
+    fixed = []
+    n_split = n_total = 0
+    for o in objects:
+        w = o.get("w", 1) or 1
+        h = o.get("h", 1) or 1
+        if o.get("id") not in ATOMIC_BLOCK_IDS or (w <= 1 and h <= 1):
+            fixed.append(o)
+            continue
+
+        left_col = o.get("x", 0) // 160 - w // 2
+        bottom_row = o.get("y", 0) // 160
+        for dx in range(w):
+            for dy in range(h):
+                tile = dict(o)
+                tile["w"] = 1
+                tile["h"] = 1
+                tile["x"] = (left_col + dx) * 160 + 80
+                tile["y"] = (bottom_row + dy) * 160 + 80
+                fixed.append(tile)
+        n_split += 1
+        n_total += w * h
+
+    if n_split:
+        print(f"  [{label}] extended-object fix: split {n_split} object(s) "
+              f"into {n_total} 1x1 tile(s)")
+    return fixed
+
+
+def _col_w_to_x(col, w):
+    """Inverse of  col = x // 160 - w // 2  (the center-of-span convention
+    used after _fix_object_anchors)."""
+    return (col + w // 2) * 160 + (80 if w % 2 else 0)
+
+
+def _row_to_y(row):
+    """Inverse of  row = y // 160  (y is always row*160 + 80)."""
+    return row * 160 + 80
+
+
+def _fix_platform_objects(objects, ground, label="map"):
+    """Merge adjacent 1x1 PLATFORM_FILL_IDS "cap" objects on the same row
+    into one object, then grow any PLATFORM_FILL_IDS object smaller than the
+    3x3 minimum SMM2 allows down to ground level.
+
+    Some generators place only a Mushroom/Semisolid/Half-Collision
+    Platform's "cap" -- a row of w=1,h=1 objects (or a single w>1,h=1
+    object) at the tile Mario stands on, with no body/stem beneath it.
+    Extra columns are added symmetrically (so a Mushroom Platform's stem
+    still falls under the originally-placed column(s)). Extra rows are
+    added BELOW the cap (so the platform's walkable top stays where it was
+    placed): first up to the 3x3 minimum SMM2 allows, then further still as
+    long as any column under the platform is missing a ground tile directly
+    below it, until the platform rests on solid ground (or hits row 0). A
+    single resized object then renders correctly on its own:
+    Semisolid/Half-Collision fill their whole footprint, while Mushroom
+    Platform fills only the center column below its cap.
+    """
+    ground_set = {(g.get("x"), g.get("y")) for g in ground}
+
+    others = []
+    groups = {}
+    for o in objects:
+        if o.get("id") not in PLATFORM_FILL_IDS:
+            others.append(o)
+            continue
+        w = o.get("w", 1) or 1
+        col = o.get("x", 0) // 160 - w // 2
+        row = o.get("y", 0) // 160
+        groups.setdefault((o.get("id"), row), []).append((col, w, o))
+
+    fixed = list(others)
+    n_merged = n_grown = 0
+    for (oid, row), entries in groups.items():
+        entries.sort(key=lambda e: e[0])
+        runs = []
+        for col, w, o in entries:
+            h = o.get("h", 1) or 1
+            if (h == 1 and runs and runs[-1]["h"] == 1
+                    and runs[-1]["end"] == col):
+                runs[-1]["end"] = col + w
+                runs[-1]["count"] += 1
+            else:
+                runs.append({"start": col, "end": col + w, "h": h,
+                              "count": 1, "obj": o})
+
+        for run in runs:
+            o = dict(run["obj"])
+            col, w, h = run["start"], run["end"] - run["start"], run["h"]
+            cap_row = row + h - 1
+
+            if run["count"] > 1:
+                n_merged += run["count"] - 1
+            if w < PLATFORM_MIN_SIZE or h < PLATFORM_MIN_SIZE:
+                n_grown += 1
+
+            if w < PLATFORM_MIN_SIZE:
+                col -= (PLATFORM_MIN_SIZE - w) // 2
+                w = PLATFORM_MIN_SIZE
+            if h < PLATFORM_MIN_SIZE:
+                new_row = max(0, cap_row - (PLATFORM_MIN_SIZE - 1))
+                h = cap_row - new_row + 1
+                while new_row > 0 and any(
+                        (c, new_row - 1) not in ground_set
+                        for c in range(col, col + w)):
+                    new_row -= 1
+                    h += 1
+            else:
+                new_row = row
+
+            o["x"] = _col_w_to_x(col, w)
+            o["y"] = _row_to_y(new_row)
+            o["w"] = w
+            o["h"] = h
+            fixed.append(o)
+
+    if n_merged or n_grown:
+        print(f"  [{label}] platform-fill fix: merged {n_merged} cap object(s), "
+              f"grew {n_grown} platform object(s) to the "
+              f"{PLATFORM_MIN_SIZE}x{PLATFORM_MIN_SIZE} minimum "
+              f"(extended further to clear voids beneath them)")
     return fixed
 
 
 def pack_map(j, label="map"):
-    objects          = _fix_object_anchors(j.get("objects", []), label)
     ground           = j.get("ground", [])
+    objects          = _fix_object_anchors(j.get("objects", []), label)
+    objects          = _fix_platform_objects(objects, ground, label)
+    objects          = _fix_extended_objects(objects, label)
     snakes           = j.get("snakes", [])
     clear_pipes      = j.get("clear_pipes", [])
     piranha_creepers = j.get("piranha_creepers", [])

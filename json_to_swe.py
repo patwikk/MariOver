@@ -23,7 +23,11 @@ Each world is a dict of sections:
     S2  ground/terrain tiles      {xx, yy, i}
     S3  decorations               {xx, yy, i, ID, spr}      (left empty here)
     S4  objects / enemies         {xx, yy, ID, scl, dir, ...many flags}
-    S5  S6  S7  S8                other categories           (left empty here)
+    S5  pipes                     {xx, yy, dir, sz, xscl, yscl, ...}
+    S6  "obj_cannon_res" entries  Cannon: {xx, yy, dir, rht, dwn, up, lft}
+    S7  "stretchy sprite" objects Bullet Bill Blaster / Semisolid Platform:
+                                   {xx, yy, dir, spr, wth, hht, dph, ...}
+    S8                             (left empty here)
 
 An unused subworld is written as SB1 = {"S1": []}, matching the editor.
 
@@ -41,6 +45,10 @@ boundaries   pixels (16 / tile), top=432
 The playfield is 27 tiles (432 px) tall, so a tile at row `r` (from the
 bottom) maps to swe_yy = (27 - 1 - r) * 16. Object columns use the viewer's
 formula  col = x//160 - w//2 ,  rows  row = y//160  (see mm2_viewer_json.py).
+OBJ_LEFT_ANCHOR_IDS use  col = x//160  (no -w//2) instead. For
+OBJ_H_ANCHOR_TOP_IDS, row is additionally shifted up by (h-1) tiles, since
+their SWE sprite sits at the top of the object's h-tall MM2 footprint, not
+its bottom row.
 
 Lossy / best-effort
 -------------------
@@ -54,11 +62,20 @@ This is a "best effort" conversion, not a perfect round trip:
     (obj_*_res). OBJ_ID_MAP covers the objects SMMWE actually has; anything
     SMMWE lacks (clear pipes, snake/track blocks, most koopalings, tree,
     crate, ...) is dropped with a warning.
+  * Bullet Bill Blaster (13), Semisolid Platform (16) and Cannon (47) are
+    NOT S4 objects in SMMWE -- they're emitted to S6/S7 by build_cannons /
+    build_platform_objects. Confusingly, SMMWE's internal names are swapped
+    relative to MM2: the Cannon is "obj_cannon_res" (S6) and the Bullet Bill
+    Blaster is "obj_bullebill_base_res" (S7), verified in-game against
+    hand-placed reference saves. The Cannon's S6 entry has no size field, so
+    its MM2 `h` is lost.
   * Object flags. MM2 packs orientation/wings/parachute/etc. into `flag` /
     `cflag` bitfields whose per-object meaning isn't fully documented. We
     emit the SWE flag fields as 0 (default) and only set scl / a best-effort
     direction. Wings, parachutes, etc. are not carried over.
-  * Decorations (S3) and the slope/track object families are not emitted.
+  * Decorations (S3) and the track object families are not emitted. Slight/
+    Steep Slopes (87/88) have no diagonal SWE equivalent, so their full
+    w x h bounding box is filled in as solid S2 ground instead.
 
 Usage
 -----
@@ -150,13 +167,15 @@ OBJ_ID_MAP = {
     8:   "obj_coin_res",            # Coin
     9:   None,                      # Pipe -> emitted to S5 (see build_pipes)
     10:  "obj_spring_res",          # Spring / Trampoline
-    11:  "obj_platform_res",        # Lift (approx)
+    # 11 Lift -> S7 "obj_platform_res", see build_platform_objects
     12:  "obj_thwomp_res",          # Thwomp
-    13:  "obj_bullebill_base_res",  # Bullet Bill Blaster
-    14:  "obj_mushroom_platform_res",  # Mushroom Platform
+    # 13 Bullet Bill Blaster -> S7 "obj_bullebill_base_res", see build_platform_objects
+    # 14 Mushroom Platform -> S7 "obj_mushroom_platform_res", see build_platform_objects
+    14:  None,
     15:  "obj_bobomb_res",          # Bob-omb
-    16:  "obj_platform_res",        # Semisolid Platform (approx)
-    17:  "obj_puente_res",          # Bridge
+    # 16 Semisolid Platform -> S7 "obj_semisolid_platform1", see build_platform_objects
+    # 17 Bridge -> S7 "obj_puente_res", see build_platform_objects / PLATFORM_S7_IDS
+    17:  None,
     18:  "obj_pswitch_res",         # P Switch
     19:  "obj_pow_res",             # POW Block
     20:  "obj_mushroom_res",        # Super Mushroom
@@ -179,22 +198,23 @@ OBJ_ID_MAP = {
     37:  None,                      # Starting Brick (editor marker)
     38:  "obj_arrow_res",           # Starting Arrow
     39:  "obj_magikoopa_res",       # Magikoopa
-    40:  "obj_spike_res",           # Spike Top (approx)
+    40:  "obj_spiny_res",           # Spike Top -> Spiny (approx)
     41:  "obj_boo_res",             # Boo
     42:  "obj_clown_res",           # Clown Car
     43:  "obj_pinchos_res",         # Spike Trap
     44:  "obj_mushroom_res",        # Big Mushroom (approx; see scl)
     45:  None,                      # Goomba's Shoe (no SMMWE equiv)
     46:  "obj_drybones_res",        # Dry Bones
-    47:  "obj_cannon_res",          # Cannon
+    # 47 Cannon -> S6 "obj_cannon_res", see build_cannons
     48:  "obj_blooper_res",         # Blooper
-    49:  "obj_puente_res",          # Castle Bridge (approx)
+    # 49 Castle Bridge (approx) -> S7 "obj_puente_res", see build_platform_objects / PLATFORM_S7_IDS
+    49:  None,
     50:  "obj_spring_res",          # Jumping Machine (approx)
     51:  None,                      # Skipsqueak
     52:  None,                      # Wiggler
     53:  "obj_cinta_res",           # Fast Conveyor Belt
     54:  "obj_soplete_res",         # Burner
-    55:  "obj_door_res",            # Door
+    55:  None,                      # Door -> S8 paired entry, see build_doors
     56:  "obj_cheepcheep_res",      # Cheep Cheep
     57:  "obj_muncher_res",         # Muncher
     58:  "obj_rocky_res",           # Rocky Wrench
@@ -230,7 +250,9 @@ OBJ_ID_MAP = {
     88:  None,                      # Steep Slope (terrain)
     89:  None,                      # Reel Camera (cutscene marker)
     90:  "obj_checkpoint_res",      # Checkpoint Flag
-    91:  "obj_seesaw_res",          # Seesaw
+    # 91 Seesaw -> S7 stretchy "obj_seesaw_res", sized to the seesaw's
+    # footprint, see PLATFORM_S7_IDS / build_platform_objects
+    91:  None,
     92:  "obj_pink_coin_res",       # Red Coin (approx -> pink coin)
     93:  None,                      # Clear Pipe
     94:  "obj_cinta_res",           # Conveyor Belt
@@ -238,11 +260,11 @@ OBJ_ID_MAP = {
     96:  None,                      # Ant Trooper
     97:  None,                      # Warp Box
     98:  "obj_bowserjr_res",        # Bowser Jr.
-    99:  "obj_onoffblock_res",      # ON/OFF Block
-    100: None,                      # Dotted-Line Block
+    99:  None,                      # ON/OFF Block -> obj_onoffblock_res/_blue_res, see ONOFF_SWE_IDS
+    100: None,                      # Dotted-Line Block -> obj_onoffplatform_res/_blue_res, see ONOFF_SWE_IDS
     101: None,                      # Water Marker (liquid is in S1 wl)
     102: "obj_monty_res",           # Monty Mole
-    103: "obj_fishbone_res",        # Fish Bone
+    103: "obj_cheepcheep_res",      # Fish Bone -> Cheep Cheep (approx)
     104: "obj_angrysun_res",        # Angry Sun
     105: "obj_claw_res",            # Swinging Claw
     106: None,                      # Tree (decoration)
@@ -284,6 +306,34 @@ MM2_PIPE_DIR = {0x00: "R", 0x20: "L", 0x40: "U", 0x60: "D"}
 PIPE_DIR_MAP = {"U": 0, "R": 1, "D": 2, "L": 3}
 PIPE_ROT = {0: 0, 1: -90, 2: 180, 3: -270}
 
+# obj_skewer_res `dir`/`rot`. dir=0 (the generic S4 default) is not a valid
+# case in scr_edit_to_play and crashes on entering play mode, so Skewer must
+# always get one of 1-4. MM2 flag bit 23 (1<<23) distinguishes ceiling-mounted
+# skewers from floor-mounted ones. Mapping reverse-engineered by hand-placing
+# all 4 of this level's skewers correctly in the SMMWE editor and inspecting
+# the resulting .swe: bit23 clear -> dir=1/rot=0, bit23 set -> dir=3/rot=180.
+# left/right-mounted skewers (dir=2/4) aren't reverse-engineered yet.
+SKEWER_CEILING_FLAG = 1 << 23
+SKEWER_DIR = {0: 1, SKEWER_CEILING_FLAG: 3}
+SKEWER_ROT = {1: 0, 3: 180}
+
+# ON/OFF Block (99) / Dotted-Line Block (100) -> SWE S4 "ID", keyed by MM2
+# flag bit 2 (flag & 4), a shared red/blue "color" flag for both ids.
+# Verified exhaustively against "3000209_6 but right.swe": all 73 id-99/100
+# objects in that level (4x id 99, 69x id 100) match this rule + the generic
+# centered-anchor position formula exactly, including the surprising 1:1
+# mapping of id 99 ("ON/OFF Block") to "obj_onoffblock_res" rather than the
+# "obj_onoffplatform_*" pair (which is instead what id 100, "Dotted-Line
+# Block", maps to). Value tuple is (flag&4 clear, flag&4 set).
+# NOTE: "obj_onoffblock_blue_res" (id 99 with flag&4 set) has no example in
+# the reference and is extrapolated from the verified obj_onoffplatform_res/
+# _blue_res pair for id 100.
+ONOFF_COLOR_FLAG = 1 << 2
+ONOFF_SWE_IDS = {
+    99:  ("obj_onoffblock_res", "obj_onoffblock_blue_res"),
+    100: ("obj_onoffplatform_blue_res", "obj_onoffplatform_res"),
+}
+
 # Constant/default fields for an S5 pipe entry, taken verbatim from a
 # hand-placed "vertical, length 4" pipe saved by the SMMWE editor (see
 # build_pipes). Per-pipe code overrides sz/sclx/rot/xscl/yscl/dir/xx/yy/
@@ -304,14 +354,156 @@ OBJ_Y_OFFSET_PX = {
     70: PX,   # Big Coin (10-coin) -> obj_coin10_res
 }
 
+# MM2 object ids whose SWE counterpart anchors its sprite at the LEFT edge of
+# the MM2 footprint (col = x // SUBPX), matching _LEFT_ANCHOR in
+# mm2_viewer_json.py, instead of the generic centered formula
+# col = x // SUBPX - w // 2.
+OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 49, 71}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge
+
+# Thwomp (12, h=2) is top-anchored like the ids below: with the generic
+# bottom-anchored formula its obj_thwomp_res sprite's bottom row lands on the
+# same cell as the object placed one row above it, hiding that object under
+# the Thwomp. Shifting yy up by (h-1)*PX=1 tile fixes both Thwomps in
+# "3000209_6 but right.swe" -- one was fully overlapping a side-by-side
+# ON/OFF Block pair (hiding both blocks under it), the other sat one tile
+# too low above its own pair.
+OBJ_H_ANCHOR_TOP_IDS = OBJ_H_ANCHOR_TOP_IDS | {12}
+
+# MM2 object ids whose `h` (tile height, growing UP from the (x,y) anchor at
+# the bottom row) is not represented by a stretched SWE sprite -- instead the
+# single SWE sprite sits at the TOP of that h-tall span. Without this, these
+# objects are placed on the object's bottom row, which for most level designs
+# is the ground row and hides the sprite behind/under terrain ("doesn't show
+# up at all"). yy is shifted up by (h-1) tiles to compensate. Verified exactly
+# against toost's drawing_instructions for Bullet Bill Blaster (id 13: h=2/5/7
+# all match (h-1)*PX precisely); applied to Banzai Bill / Half-Collision
+# Platform as a best-effort extrapolation (not independently verified).
+# Bullet Bill Blaster / Semisolid Platform / Cannon / Mushroom Platform
+# (13/16/47/14) are no longer routed through this S4 path -- see
+# build_cannons / build_platform_objects, which apply the same (h-1)*PX
+# shift directly.
+#
+OBJ_H_ANCHOR_TOP_IDS = {32, 71}
+
 # Every key an S4 object dict carries (from a real .swe). All flags default to
 # 0; we only fill ID / xx / yy / scl / dir.
+#
+# "dph" was missing here too (see S6_CANNON_TEMPLATE / PLATFORM_S7_IDS for the
+# same crash on the S6/S7 side): without it, obj_creator_jugar_editar's
+# scr_edit_to_play conversion hits "instance_create_depth argument 2 ...
+# expecting a Number" for every S4 entry (e.g. obj_skewer_res/obj_claw_res) as
+# soon as test-play / play mode starts. dph=0 is GameMaker's default draw
+# depth, same value used for S6_CANNON_TEMPLATE.
 S4_TEMPLATE = {
     "air": 0, "pinkcoin": 0, "fire": 0, "claw": 0, "key": 0, "rock": 0,
     "sprout": 0, "energy": 0, "wings": 0, "w_mode": 0, "rot": 0,
     "can_complement": 0, "parachute": 0, "progress": 0, "sierra": 0,
-    "bumper": 0, "inup": 0, "ice": 0,
+    "bumper": 0, "inup": 0, "ice": 0, "dph": 0,
 }
+
+# Every key an S6 Cannon ("obj_cannon_res") entry carries, from a hand-placed
+# reference save. rht/dwn/up/lft/dir are direction-related flags whose
+# per-direction meaning isn't reverse-engineered yet; the reference (default
+# placement) had dwn=1 and everything else 0, used as a constant.
+#
+# "dph" was missing here too: like the Lift -> obj_platform_res crash (S4
+# entry missing dph/wth/hht/spr), a level with a Cannon crashed on entering
+# play mode with "instance_create_depth argument 2 ... expecting a Number",
+# this time from obj_load_guardabot (the S6 loader) instead of
+# obj_creator_jugar_editar (the S4 loader). dph=0 is GameMaker's default
+# draw depth and matches obj_bullebill_base_res's dph (the other
+# cannon/blaster-family S7 entry, see PLATFORM_S7_IDS).
+S6_CANNON_TEMPLATE = {
+    "rht": 0, "dwn": 1, "up": 0, "lft": 0, "dir": 0, "dph": 0,
+}
+
+# Every key an S7 "stretchy sprite" entry carries besides ID/xx/yy/dir/spr/
+# wth/hht/dph, from a hand-placed reference save. All state flags default to 0
+# (contents/effects like fire/ice/wings/parachute aren't carried over).
+S7_TEMPLATE = {
+    "air": 0, "pinkcoin": 0, "clr": 0, "fire": 0, "key": 0, "rock": 0,
+    "energy": 0, "wings": 0, "parachute": 0, "ice": 0,
+}
+
+# MM2 object id -> S7 "ID" string for the platform-family stretchy sprites.
+# See build_platform_objects for the wth/hht/dph formulas. SMMWE's naming
+# swaps 13 <-> 47 relative to MM2: the Bullet Bill Blaster (13) is
+# "obj_bullebill_base_res" and the Cannon (47) is "obj_cannon_res" (in S6,
+# see build_cannons / S6_CANNON_TEMPLATE) -- verified in-game.
+PLATFORM_S7_IDS = {
+    16: "obj_semisolid_platform1",   # Semisolid Platform
+    13: "obj_bullebill_base_res",    # Bullet Bill Blaster
+    91: "obj_platform_res",          # Seesaw -> sized moving platform
+    11: "obj_platform_res",          # Lift -> moving platform
+    17: "obj_puente_res",            # Bridge
+    49: "obj_puente_res",            # Castle Bridge (approx)
+    14: "obj_mushroom_platform_res", # Mushroom Platform
+}
+
+# obj_puente_res sprite name. From a hand-placed reference save ("bridge
+# example .swe", NSMBU/ghost) containing 5 bridges of width 3-7: every
+# bridge used "spr_NSMBU_puente_underground" regardless of the level's
+# theme, and dph=8/hht=3/dir=0 were constant across all 5. No theme/
+# gamestyle variants are confirmed, so this single verified sprite is used
+# for every bridge.
+PUENTE_SPRITE = "spr_NSMBU_puente_underground"
+
+# SWE gamestyle int (see GAMESTYLE_MAP) -> sprite-name prefix used by the S7
+# "ssp1"/"bullebill_base" sprites. SMW (2) sprites have no prefix.
+GAMESTYLE_SPR_PREFIX = {0: "SMB", 1: "SMB3", 2: "", 3: "NSMBU"}
+
+# THEME_MAP theme names for which a `spr_<prefix>_ssp1_<theme>` sprite exists,
+# per gamestyle prefix (reverse-engineered from data.win's string table).
+# Themes not listed fall back to "overworld". Night variants are not used
+# (best-effort: a level converted at night gets the day sprite).
+SSP1_THEMES = {
+    "SMB":   {"airship", "castle", "desert", "ghost", "overworld", "snow",
+              "underground", "underwater"},
+    "SMB3":  {"airship", "castle", "desert", "forest", "ghost", "overworld",
+              "sky", "snow", "underground", "underwater"},
+    "":      {"airship", "castle", "desert", "forest", "ghost", "overworld",
+              "snow", "underground", "underwater"},
+    "NSMBU": {"airship", "castle", "desert", "forest", "ghost", "overworld",
+              "sky", "snow", "underground", "underwater"},
+}
+
+
+def ssp_sprite_name(gamestyle, theme):
+    """Semisolid Platform sprite name for a given SWE gamestyle/theme."""
+    prefix = GAMESTYLE_SPR_PREFIX.get(gamestyle, "NSMBU")
+    valid = SSP1_THEMES.get(prefix, SSP1_THEMES["NSMBU"])
+    t = theme if theme in valid else "overworld"
+    return f"spr_{prefix}_ssp1_{t}" if prefix else f"spr_ssp1_{t}"
+
+
+def mp1_sprite_name(gamestyle, theme):
+    """Mushroom Platform sprite name for a given SWE gamestyle/theme.
+    Confirmed for NSMBU/ghost ("spr_NSMBU_mp1_ghost") via a hand-placed
+    reference save; other gamestyles/themes follow the ssp1 naming pattern
+    (best-effort, SSP1_THEMES reused since mp1 has no separate theme list)."""
+    prefix = GAMESTYLE_SPR_PREFIX.get(gamestyle, "NSMBU")
+    valid = SSP1_THEMES.get(prefix, SSP1_THEMES["NSMBU"])
+    t = theme if theme in valid else "overworld"
+    return f"spr_{prefix}_mp1_{t}" if prefix else f"spr_mp1_{t}"
+
+
+def bullebill_sprite_name(gamestyle):
+    """Bullet Bill Blaster ("obj_bullebill_base_res") sprite name for a SWE
+    gamestyle. This sprite has no theme variants (only SMB3/NSMBU have a
+    dedicated sprite; SMB1/SMW share the unprefixed default)."""
+    prefix = GAMESTYLE_SPR_PREFIX.get(gamestyle, "NSMBU")
+    if prefix in ("SMB3", "NSMBU"):
+        return f"spr_{prefix}_bullebill_base"
+    return "spr_bullebill_base"
+
+
+def platform_sprite_name(gamestyle):
+    """Moving platform ("obj_platform_res") sprite name for a SWE gamestyle.
+    Confirmed for SMB1 (prefix "SMB") via a hand-placed reference save
+    ("spr_SMB_platform"); other gamestyles follow the same
+    spr_<prefix>_platform pattern, with SMW (no prefix) using "spr_platform"."""
+    prefix = GAMESTYLE_SPR_PREFIX.get(gamestyle, "NSMBU")
+    return f"spr_{prefix}_platform" if prefix else "spr_platform"
 
 
 # ---------------------------------------------------------------------------
@@ -335,11 +527,113 @@ def marker_yy(tile_y):
 
 def object_cell(o):
     """Return (col, row_from_bottom) for an MM2 object, matching the viewer's
-    formula:  col = x//160 - w//2 ,  row = y//160 ."""
+    formula:  col = x//160 - w//2 ,  row = y//160 -- except for
+    OBJ_LEFT_ANCHOR_IDS, which use  col = x//160  (no -w//2), matching
+    _LEFT_ANCHOR in mm2_viewer_json.py."""
     w = max(1, o.get("w", 1))
-    col = o["x"] // SUBPX - w // 2
+    if o.get("id") in OBJ_LEFT_ANCHOR_IDS:
+        col = o["x"] // SUBPX
+    else:
+        col = o["x"] // SUBPX - w // 2
     row = o["y"] // SUBPX
     return col, row
+
+
+# Object ids whose rectangular w x h bounding box does not represent a solid
+# wall/ceiling/floor -- excluded from occupied_cells so they don't create
+# false "solid" terrain signals for build_cannons.
+_NON_SOLID_IDS = {
+    87,  # Slight Slope -- diagonal, not a solid rectangle
+    88,  # Steep Slope -- diagonal, not a solid rectangle
+    16,  # Semisolid Platform -- walk-through from below/sides
+}
+
+
+def occupied_cells(j, *, exclude_id=None, extra_ground=None):
+    """Set of (col, row_from_bottom) tile cells covered by S2 ground terrain
+    or by any object's footprint (other than `exclude_id`), plus any cells in
+    `extra_ground` (e.g. slope footprints filled in by build_world). Used by
+    build_cannons to detect adjacent floor/ceiling/wall terrain."""
+    occ = {(g["x"], g["y"]) for g in j.get("ground", [])}
+    if extra_ground:
+        occ |= extra_ground
+    for o in j.get("objects", []):
+        oid = o.get("id")
+        if oid == exclude_id or oid in _NON_SOLID_IDS:
+            continue
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        col, row = object_cell(o)
+        for dx in range(w):
+            for dy in range(h):
+                occ.add((col + dx, row + dy))
+    return occ
+
+
+def skewer_footprint_cells(objects):
+    """Cells covered by each Skewer's (id 83) w x h bounding box.
+
+    MM2 lets a Skewer share its cell with a ground/block tile (it's embedded
+    in the surface it extends from), but SMMWE's obj_skewer_res can't overlap
+    S2 ground -- the skewer's own body acts as the solid surface there, so
+    these cells are dropped from S2 (see build_world)."""
+    cells = set()
+    for o in objects:
+        if o.get("id") != 83:
+            continue
+        col, row = object_cell(o)
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        for dx in range(w):
+            for dy in range(h):
+                cells.add((col + dx, row + dy))
+    return cells
+
+
+# MM2 object ids for slope terrain, which SWE has no diagonal equivalent for.
+# build_world fills these as a solid ascending/descending staircase of S2
+# ground instead of dropping them. Value is the slope's "run" per 1-tile
+# rise: Steep Slope (88) rises 1 tile per column (slope 1), Slight Slope (87)
+# rises 1 tile per 2 columns (slope 1/2).
+_SLOPE_STEPS = {88: 1, 87: 2}
+_SLOPE_IDS = set(_SLOPE_STEPS)
+
+
+def slope_fill_cells(objects):
+    """Set of (col, row_from_bottom) ground cells forming a staircase for
+    every Slight/Steep Slope (87/88) object, to be merged into S2 ground.
+
+    Every one of the object's w columns gets a step of height
+    min(ceil(run/step), h) tiles (run = 1..w from the low end), filled from
+    the object's base row upward -- a "slope of 1" (steep, step=1) or "slope
+    of 1/2" (slight, step=2) staircase capped at the slope's own height h, so
+    the last two columns at the high end both sit flush at height h. flag &
+    0x100000 flips which end (left/right) is the low end, matching
+    slope_tiles() in mm2_viewer_json.py.
+
+    Verified against 3000065_1_overworld.json: with no x/y adjustment, this
+    exactly fills the ground tiles that Goombas standing at the low end, the
+    seam between two chained ascending slopes, and the peak all stand on.
+
+    Slopes anchor at their LEFT edge (col = x // SUBPX, no -w//2), per
+    obj_anchor() in mm2_viewer_json.py.
+    """
+    cells = set()
+    for o in objects:
+        step = _SLOPE_STEPS.get(o.get("id"))
+        if step is None:
+            continue
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        base_col = o["x"] // SUBPX
+        base_row = o["y"] // SUBPX
+        descending = (o.get("flag", 0) & 0x100000) != 0
+        for x in range(w):
+            run = (w - x) if descending else (x + 1)
+            height = min((run + step - 1) // step, h)  # ceil(run/step), capped at h
+            for y in range(height):
+                cells.add((base_col + x, base_row + y))
+    return cells
 
 
 # ---------------------------------------------------------------------------
@@ -432,16 +726,26 @@ def build_pipes(objects):
     return out
 
 
+# MM2 object ids handled by dedicated builders, not the generic S4 path.
+_NON_S4_IDS = {9, 11, 13, 14, 16, 17, 47, 49, 55, 91}  # 9=Pipe (S5), 55=Door (S8), 11/13/14/16/17/47/49/91 -> S6/S7 (see below)
+
+
 def build_objects(objects):
     """MM2 objects[] -> SWE S4. Returns (s4_list, dropped_counts).
-    Pipes (id 9) are handled separately by build_pipes and skipped here."""
+    Pipes (id 9) and the S6/S7 special cases (13/16/47) are handled by
+    build_pipes / build_cannons / build_platform_objects and
+    skipped here."""
     out = []
     dropped = {}
     for o in objects:
         oid = o.get("id")
-        if oid == 9:
+        if oid in _NON_S4_IDS or oid in _SLOPE_IDS:
             continue
-        swe_id = OBJ_ID_MAP.get(oid)
+        if oid in ONOFF_SWE_IDS:
+            off_id, on_id = ONOFF_SWE_IDS[oid]
+            swe_id = on_id if o.get("flag", 0) & ONOFF_COLOR_FLAG else off_id
+        else:
+            swe_id = OBJ_ID_MAP.get(oid)
         if swe_id is None:
             name = o.get("name", f"id={oid}")
             dropped[name] = dropped.get(name, 0) + 1
@@ -449,16 +753,232 @@ def build_objects(objects):
         col, row = object_cell(o)
         # Big variants (Big Mushroom etc.) -> scale 2, everything else 1.
         scl = 2 if oid == 44 else 1
+        yy = (FIELD_HEIGHT_TILES - 1 - row) * PX - OBJ_Y_OFFSET_PX.get(oid, 0)
+        if oid in OBJ_H_ANCHOR_TOP_IDS:
+            h = max(1, o.get("h", 1))
+            yy -= (h - 1) * PX
         entry = dict(S4_TEMPLATE)
         entry.update({
             "ID": swe_id,
             "xx": col * PX,
-            "yy": (FIELD_HEIGHT_TILES - 1 - row) * PX - OBJ_Y_OFFSET_PX.get(oid, 0),
+            "yy": yy,
             "scl": scl,
             "dir": 0,   # best-effort: MM2 flag bitfields aren't carried over
         })
+        if oid == 83:
+            # Skewer anchors one column right of and one row above the
+            # generic centered-bottom cell (col + w//2, row + 1) -- derived
+            # by hand-placing all 4 of this level's skewers correctly in the
+            # SMMWE editor and comparing the resulting .swe (see SKEWER_DIR).
+            w = max(1, o.get("w", 1))
+            entry["xx"] = (col + w // 2) * PX
+            entry["yy"] = yy - PX
+            entry["dir"] = SKEWER_DIR.get(o.get("flag", 0) & SKEWER_CEILING_FLAG, 1)
+            entry["rot"] = SKEWER_ROT.get(entry["dir"], 0)
         out.append(entry)
     return out, dropped
+
+
+def build_doors(objects):
+    """MM2 Door (id 55) -> SWE S8 "obj_door_res" entries.
+
+    SMMWE stores a connected door PAIR as a single S8 entry holding both
+    doors' positions: {"xx","yy"} for one door and {"dr_x","dr_y"} for its
+    linked partner (reverse-engineered from "3000621 but with the doors.swe").
+    Position uses the same (col*PX, (FIELD_HEIGHT_TILES-1-row)*PX) formula as
+    the generic S4 path (object_cell, no offsets).
+
+    MM2's JSON has no cid/lid/sid pair link for doors (always -1), but bits
+    19-22 of `flag`, i.e. (flag >> 19) & 0xF, hold a per-door pairing order
+    (confirmed against the reference file's 3 S8 entries and the user's
+    explicit pairing for all 4 pairs in this level). Doors are sorted by
+    that order and paired consecutively (1st&2nd, 3rd&4th, ...); within each
+    pair the higher-order door's position becomes "xx/yy" and the
+    lower-order door's becomes "dr_x/dr_y", matching the reference exactly.
+    A trailing, unpaired door is dropped.
+    """
+    doors = sorted(
+        (o for o in objects if o.get("id") == 55),
+        key=lambda o: (o.get("flag", 0) >> 19) & 0xF,
+    )
+    out = []
+    for lo, hi in zip(doors[0::2], doors[1::2]):
+        c_lo, r_lo = object_cell(lo)
+        c_hi, r_hi = object_cell(hi)
+        out.append({
+            "xx": c_hi * PX,
+            "yy": (FIELD_HEIGHT_TILES - 1 - r_hi) * PX,
+            "dr_x": c_lo * PX,
+            "dr_y": (FIELD_HEIGHT_TILES - 1 - r_lo) * PX,
+            "ID": "obj_door_res",
+        })
+    return out
+
+
+def build_cannons(objects, occ):
+    """MM2 Cannon (id 47) -> SWE S6 "obj_cannon_res" entries.
+
+    Position uses the same centered-column / top-of-footprint formula as
+    build_objects' OBJ_H_ANCHOR_TOP_IDS path. The S6 entry has no size
+    field, so MM2's `h` cannot be represented and is dropped.
+
+    up/dwn/dir are not stored in MM2's `flag` in a reverse-engineered form,
+    so they're inferred from adjacent terrain/objects in `occ` (see
+    occupied_cells), verified against the 21 cannons in a real level:
+
+      * A solid cell directly above the footprint means the cannon is
+        ceiling-mounted (up=1, dwn=0).
+      * A ceiling-mounted cannon with open space directly below shoots
+        straight down (dir=6) -- this is the common "turret in an open
+        room" case (confirmed: 3 single-tile + 1 big ceiling cannon in an
+        open alcove all shoot down, regardless of side walls).
+      * A ceiling-mounted cannon with something solid directly below (e.g.
+        embedded in the face of a pillar) instead faces away from an
+        adjacent side wall (dir=0 right / dir=4 left).
+      * Everything else is floor-mounted, facing right (dwn=1, dir=0) --
+        side-wall-based left/right facing for floor cannons was tried and
+        produced a false positive, so floor cannons always face right.
+
+    A floor-mounted "big" (h>1) cannon's MM2 bounding box is embedded in
+    the ground it's mounted on -- only the row above the box (row+h, the
+    same row the ceiling-check above confirms is open) is clear, so that's
+    where the single S6 tile is placed; h==1 cannons keep the existing
+    top-of-footprint placement (row+h-1 == row).
+
+    `flag` bit 26 (1<<26) is set on every cannon whose dir mapping above
+    matches the reference saves; the one cannon missing it renders with
+    left/right swapped, so dir 0/4 are flipped when that bit is absent.
+
+    rht/lft are always 0, per the reference save."""
+    HFLIP_DIR = {0: 4, 4: 0}
+    out = []
+    for o in objects:
+        if o.get("id") != 47:
+            continue
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        col, row = object_cell(o)
+
+        ceiling = any((col + dx, row + h) in occ for dx in range(w))
+        if ceiling:
+            up, dwn = 1, 0
+            below_open = not any((col + dx, row - 1) in occ for dx in range(w))
+            if below_open:
+                cannon_dir = 6
+            else:
+                wall_left = any((col - 1, row + dy) in occ for dy in range(h))
+                wall_right = any((col + w, row + dy) in occ for dy in range(h))
+                cannon_dir = 4 if (wall_right and not wall_left) else 0
+            top_row = row + h - 1
+        else:
+            up, dwn = 0, 1
+            cannon_dir = 0
+            top_row = row + h if h > 1 else row
+
+        if not (o.get("flag", 0) & (1 << 26)):
+            cannon_dir = HFLIP_DIR.get(cannon_dir, cannon_dir)
+
+        entry = dict(S6_CANNON_TEMPLATE)
+        entry.update({
+            "ID": "obj_cannon_res",
+            "xx": col * PX,
+            "yy": ground_yy(top_row),
+            "up": up,
+            "dwn": dwn,
+            "dir": cannon_dir,
+        })
+        out.append(entry)
+    return out
+
+
+def build_platform_objects(objects, *, gamestyle, theme):
+    """MM2 Bullet Bill Blaster (13) / Semisolid Platform (16) / Seesaw (91) /
+    Bridge (17) / Castle Bridge (49, approx) / Mushroom Platform (14)
+    -> SWE S7 entries.
+
+    S7 is a "stretchy sprite" object: `spr` selects the themed sprite and
+    `wth`/`hht` size it (in MM2 tile units). Position reuses the
+    centered/left-anchor + top-of-footprint formula from object_cell /
+    OBJ_H_ANCHOR_TOP_IDS. wth/hht = w,h directly -- verified against two
+    8-entry hand-placed reference grids (a "staircase" of 3x3/3x4/3x5/3x6
+    and a "different width" set of 3x3/4x3/5x3/6x3 Semisolid Platforms),
+    which gave wth==w and hht==h exactly in all 8 cases. `dph` doesn't
+    appear to affect rendering and is left at the constant from the
+    original single-object reference of each type (255 / 0).
+
+    Seesaw (91) and Lift (11) both use "obj_platform_res" (a vertically-
+    moving platform). Seesaw was verified via a hand-placed reference save
+    ("platform example.swe") containing wth=4/6/8 examples:
+    spr="spr_<gamestyle>_platform", dph=-1, dir=2, hht=3 (constant, the
+    sprite's fixed vertical travel height, independent of the seesaw's h).
+    wth = max(4, w) -- the seesaw's width, with a minimum of 4 (per the
+    reference's "default" size) -- giving a best-effort "platform as big as
+    the seesaw, that goes up and down".
+
+    Lift's S4 mapping to the same "obj_platform_res" ID was missing the
+    dph/wth/hht/spr fields obj_platform_res requires, crashing
+    instance_create_depth on entering play mode ("argument 2 ... expecting a
+    Number") in any level containing a Lift. Routed here with the same
+    dph=-1/dir=2/spr as the (working) seesaw mapping, but hht=1 to match
+    Lift's actual h=1 footprint (seesaw's hht=3 was seesaw-specific).
+
+    Bridge (17) / Castle Bridge (49) -> "obj_puente_res", left-anchored
+    (OBJ_LEFT_ANCHOR_IDS) like the other stretchy platforms. wth=w (MM2
+    enforces a minimum bridge width of 3, matching the reference's
+    smallest example); hht=3/dph=8/dir=0/spr=PUENTE_SPRITE are constant,
+    verified against all 5 widths (3-7) in "bridge example .swe".
+
+    Mushroom Platform (14) -> "obj_mushroom_platform_res", a single S7
+    entry per platform (the stalk below it is drawn by the sprite itself,
+    not a separate object). Left-anchored, wth=w/hht=h with no yy nudge
+    (the same plain (h-1)*PX-shifted anchor as everything else) -- verified
+    against two 4-entry reference grids ("mushroom platform example diff
+    width/length .swe") spanning w=3-6 and h=3-6: wth==w and hht==h exactly
+    in all 8 cases, and yy matched the unmodified formula assuming all 4
+    platforms in each grid share the same MM2 row. `dph = 245 + hht`
+    (248/249/250/251 for hht=3/4/5/6); `spr` follows mp1_sprite_name.
+    """
+    out = []
+    for o in objects:
+        oid = o.get("id")
+        if oid not in PLATFORM_S7_IDS:
+            continue
+        w = max(1, o.get("w", 1))
+        h = max(1, o.get("h", 1))
+        col, row = object_cell(o)
+        if oid == 91:
+            wth, hht = max(4, w), 3
+        elif oid == 11:
+            wth, hht = max(4, w), 1
+        elif oid in (17, 49):
+            wth, hht = w, 3
+        else:
+            wth, hht = w, h
+        yy = ground_yy(row) - (hht - 1) * PX
+        if oid == 91:
+            yy += 2 * PX  # nudge the seesaw replacement down 2 tiles
+        elif oid in (17, 49):
+            yy += 2 * PX  # bridge sprite sits 2 tiles above the generic anchor
+        entry = dict(S7_TEMPLATE)
+        entry.update({
+            "ID": PLATFORM_S7_IDS[oid],
+            "xx": col * PX,
+            "yy": yy,
+            "dir": 0,
+            "wth": wth, "hht": hht,
+        })
+        if oid == 16:
+            entry.update({"spr": ssp_sprite_name(gamestyle, theme), "dph": 255})
+        elif oid == 13:
+            entry.update({"spr": bullebill_sprite_name(gamestyle), "dph": 0})
+        elif oid in (17, 49):
+            entry.update({"spr": PUENTE_SPRITE, "dph": 8})
+        elif oid == 14:
+            entry.update({"spr": mp1_sprite_name(gamestyle, theme), "dph": 245 + hht})
+        else:  # 91 (Seesaw) / 11 (Lift) -- moving platform
+            entry.update({"spr": platform_sprite_name(gamestyle), "dph": -1, "dir": 2})
+        out.append(entry)
+    return out
 
 
 def build_metadata(j, *, user, name, desc, date_str, time_str):
@@ -521,19 +1041,40 @@ def build_metadata(j, *, user, name, desc, date_str, time_str):
 def build_world(j, *, user, name, desc, date_str, time_str):
     """Build a full SWE world dict (S0 or a populated SB1) from one map JSON."""
     objects = j.get("objects", [])
+    gamestyle = GAMESTYLE_MAP.get(j.get("gamestyle_raw", 0), 3)
+    theme = THEME_MAP.get(j.get("theme_raw", 0), "overworld")
     s4, dropped = build_objects(objects)
     s5 = build_pipes(objects)
+    s8 = build_doors(objects)
+
+    # Slopes have no SWE equivalent -- fill their footprint in as solid ground.
+    slope_cells = slope_fill_cells(objects)
+    ground = list(j.get("ground", []))
+    existing_ground = {(g["x"], g["y"]) for g in ground}
+    for x, y in slope_cells:
+        if (x, y) not in existing_ground:
+            ground.append({"x": x, "y": y})
+            existing_ground.add((x, y))
+
+    occ = occupied_cells(j, exclude_id=47, extra_ground=slope_cells)
+    s6 = build_cannons(objects, occ)
+    s7 = build_platform_objects(objects, gamestyle=gamestyle, theme=theme)
+
+    # Drop ground tiles under any Skewer -- SMMWE forbids the overlap (see
+    # skewer_footprint_cells).
+    skewer_cells = skewer_footprint_cells(objects)
+    ground = [g for g in ground if (g["x"], g["y"]) not in skewer_cells]
 
     world = {
         "S1": [build_metadata(j, user=user, name=name, desc=desc,
                               date_str=date_str, time_str=time_str)],
-        "S2": build_ground(j.get("ground", [])),
+        "S2": build_ground(ground),
         "S3": [],
         "S4": s4,
         "S5": s5,
-        "S6": [],
-        "S7": [],
-        "S8": [],
+        "S6": s6,
+        "S7": s7,
+        "S8": s8,
     }
     return world, dropped
 
@@ -584,7 +1125,7 @@ def parse_args():
     )
     p.add_argument("json_path", help="Path to a *_overworld.json (or plain) level JSON")
     p.add_argument("-o", "--output", help="Output .swe path (default: <stem>.swe)")
-    p.add_argument("--user", default="MariOver", help="Author name stored in the level")
+    p.add_argument("--user", default="patwick", help="Author name stored in the level")
     p.add_argument("--name", default=None, help="Level name (default: JSON 'name')")
     p.add_argument("--desc", default=None, help="Description (default: JSON 'description')")
     p.add_argument("--height", type=int, default=FIELD_HEIGHT_TILES,
@@ -631,6 +1172,9 @@ def main():
     print(f"  ground tiles : {len(s0['S2'])}")
     print(f"  objects      : {len(s0['S4'])}")
     print(f"  pipes        : {len(s0['S5'])}")
+    print(f"  cannons      : {len(s0['S6'])}")
+    print(f"  platforms    : {len(s0['S7'])}")
+    print(f"  doors        : {len(s0['S8'])}")
     if dropped:
         total = sum(dropped.values())
         print(f"  dropped {total} object(s) with no SMMWE equivalent:")

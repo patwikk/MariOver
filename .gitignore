@@ -19,3 +19,4 @@ run.sh
 decode_swe.py
 /kLevels
 /marioLevels
+*.swe

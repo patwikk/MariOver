@@ -111,6 +111,9 @@ MM2_CHAR_NAMES = {
     "5": "Iggy Koopa",
     "6": "Roy Koopa",
     "7": "Ludwig von Koopa",
+    # Style Ride slot (id 45): gamestyle-dependent (Yoshi's Egg in
+    # SMW/NSMBU); scenes carry no gamestyle, so the SMB1/SMB3 name is
+    # used here as a baseline. See mm2_json_field_dictionary.txt §6.
     "\xb5": "Goomba's Shoe",
     # items / power-ups / collectables
     "\xa2": "Coin",
@@ -120,6 +123,10 @@ MM2_CHAR_NAMES = {
     "i": "Fire Flower",
     "\xa4": "Super Star",
     "M": "Super Mushroom",
+    # Style Power-up slots A/B: gamestyle-dependent (Super Leaf/Cape Feather/
+    # Propeller Mushroom, Frog Suit/Power Balloon/Super Acorn); scenes carry
+    # no gamestyle, so the SMB1 names are used here as a baseline. See
+    # mm2_json_field_dictionary.txt §5.
     "\xb6": "Big Mushroom",
     "\xa7": "SMB2 Mushroom",
     "\xac": "Super Hammer",
