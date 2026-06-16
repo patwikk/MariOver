@@ -254,6 +254,16 @@ def level_contains_skip_object(plaintext: bytes) -> bool:
     return False
 
 
+def subworld_has_items(plaintext: bytes) -> bool:
+    """Return True if the subworld contains any objects or special blocks."""
+    if struct.unpack_from("<i", plaintext, SUBWORLD_OFFSET + MAP_OBJECT_COUNT_OFF)[0] > 0:
+        return True
+    for off in (MAP_SNAKE_BLOCK_COUNT_OFF, MAP_TRACK_BLOCK_COUNT_OFF, MAP_TRACK_COUNT_OFF):
+        if struct.unpack_from("<i", plaintext, SUBWORLD_OFFSET + off)[0] > 0:
+            return True
+    return False
+
+
 def build_bcd(plaintext: bytes) -> bytes:
     """
     Given the decrypted course payload (0x5BFC0 bytes), return the full
@@ -323,6 +333,7 @@ def extract_levels(
     name_count=None,
     skip_3dworld: bool = False,
     skip_items: bool = False,
+    skip_subworld_items: bool = False,
 ):
     from datasets import load_dataset
 
@@ -335,6 +346,7 @@ def extract_levels(
     saved = skipped = errors = 0
     skipped_3dw = 0
     skipped_items = 0
+    skipped_subworld = 0
     name_saved = 0
 
     for row in ds:
@@ -375,6 +387,11 @@ def extract_levels(
             skipped_items += 1
             continue
 
+        if skip_subworld_items and subworld_has_items(plaintext):
+            print(f"  [SKIP] data_id={data_id}: skipped because subworld has items")
+            skipped_subworld += 1
+            continue
+
         try:
             bcd = build_bcd(plaintext)
         except Exception as e:
@@ -404,6 +421,7 @@ def extract_levels(
     print(
         f"\nDone. Saved: {saved}  |  Skipped (null): {skipped}  |  "
         f"Skipped (3D World): {skipped_3dw}  |  Skipped (banned item): {skipped_items}  |  "
+        f"Skipped (subworld has items): {skipped_subworld}  |  "
         f"Errors: {errors}"
     )
     print(f"Output dir: {out.resolve()}")
@@ -433,6 +451,8 @@ def parse_args():
                    help="Skip levels whose gamestyle is Super Mario 3D World")
     p.add_argument("--skip_items", action="store_true",
                    help="Skip levels containing any object listed in SKIP_ITEM_NAMES")
+    p.add_argument("--skip_subworld_items", action="store_true",
+                   help="Skip levels whose subworld contains any items")
     return p.parse_args()
 
 # python extract_mm2_bcd.py --name "mario" --name_count 25
@@ -448,4 +468,5 @@ if __name__ == "__main__":
         name_count=args.name_count,
         skip_3dworld=args.skip_3dworld,
         skip_items=args.skip_items,
+        skip_subworld_items=args.skip_subworld_items,
     )

@@ -30,7 +30,7 @@ set IMAGES_DIR=%OUTPUT%\images
 set ASCII_DIR=%OUTPUT%\ascii
 
 echo === Step 1: Extracting %COUNT% level^(s^) matching "%NAME%" ===
-python extract_mm2_bcd.py --name "%NAME%" --name_count %COUNT% --output_dir "%BCD_DIR%" --skip_3dworld --skip_items
+python extract_mm2_bcd.py --name "%NAME%" --name_count %COUNT% --output_dir "%BCD_DIR%" --skip_3dworld --skip_items --skip_subworld_items
 if %ERRORLEVEL% neq 0 ( echo ERROR: extract_mm2_bcd.py failed. & exit /b 1 )
 
 echo === Step 2: Converting .bcd files to .json and images ===
