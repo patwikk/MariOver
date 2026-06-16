@@ -227,11 +227,11 @@ class CaptionBuilder(ParentBuilder):
 
         # Game selection
         # Game selection
-        self.game_var = tk.StringVar(value=game_selected if game_selected else "Mario")
+        self.game_var = tk.StringVar(value=game_selected if game_selected else "Mario Maker (MM)")
         
         self.game_label = ttk.Label(self.caption_frame, text="Select Game:", style="TLabel")
         self.game_label.pack()
-        self.game_dropdown = ttk.Combobox(self.caption_frame, textvariable=self.game_var, values=["Mario", "Lode Runner", "Mega Man (Simple)", "Mega Man (Full)"], state="readonly", font=GUI_FONT)
+        self.game_dropdown = ttk.Combobox(self.caption_frame, textvariable=self.game_var, values=["Mario Maker (MM)"], state="readonly", font=GUI_FONT)
         self.game_dropdown.pack()
         self.game_dropdown.bind("<<ComboboxSelected>>", lambda e: self.update_mario_only_buttons()) 
         self.update_mario_only_buttons() 
@@ -337,21 +337,11 @@ class CaptionBuilder(ParentBuilder):
     def get_patterns(self):
         # Different for LoRA and tile diffusion
         patterns = [
-                    # Mario and Lode Runner patterns
-                    "floor", "ceiling", "platform", 
+                    "floor", "ceiling", "platform",
                     "rectangular", "irregular", "enem",
-
-                    # Lode Runner patterns
-                    "ladder", "gold", "rope",
-                    "chamber", "background area",
-                    "diggable ground", "solid ground",
-
-                    # Mario patterns
                     "pipe", "coin", "tower", #"wall",
-                    "cannon", "staircase", 
-                    "question block", "loose block", 
-                    
-                    #Mega Man phrases
+                    "cannon", "staircase",
+                    "question block", "loose block",
                     "entrance direction", "exit direction",
                     "powerup", "hazard", "water",
                     "disappearing block"
@@ -425,47 +415,6 @@ class CaptionBuilder(ParentBuilder):
                 self.negative_prompt_entry.config(state=tk.DISABLED)
                 self.automatic_negative_caption_checkbox.config(state=tk.DISABLED)
 
-    # creates a pop-up window to ask the user to confirm if the detected game is correct when the tile count is ambiguous (e.g. 13 tiles could be either Mario or Mega)
-    #but, we dont like how it pops up every time so for now were commenting it out and for future if yall can find a more elegant way to handle ambiguous tile counts that would be great
-    '''  def detect_game_from_model(self):
-            try:
-                if hasattr(self.pipe, 'unet'):
-                    tile_count = self.pipe.unet.config.out_channels
-                elif hasattr(self.pipe, 'model'):
-                    tile_count = self.pipe.model.config.out_channels  # adjust if FDM differs
-                else:
-                    return None  # can't detect
-
-                if tile_count == common_settings.LR_TILE_COUNT:        # 8
-                    return "Lode Runner"
-                elif tile_count == common_settings.MM_FULL_TILE_COUNT:  # 39
-                    return "Mega Man (Full)"
-                elif tile_count == 13:
-                    # Ambiguous — ask the user to confirm
-                    answer = messagebox.askyesno(
-                        "Confirm Game",
-                        "Is this a Mario model?\n\n"
-                        "Click Yes for Mario, No for Mega Man (Simple)."
-                    )
-                    return "Mario" if answer else "Mega Man (Simple)"
-                else:
-                    return None  # unknown tile count
-            except Exception:
-                return None  # silently fail if attributes aren't there
-
-        def _apply_game_defaults(self, game):
-            self.width_entry.config(state=tk.NORMAL)
-            self.height_entry.config(state=tk.NORMAL)
-            if game == "Lode Runner":
-                w, h = common_settings.LR_WIDTH, common_settings.LR_HEIGHT
-            elif game == "Mario":
-                w, h = common_settings.MARIO_WIDTH, common_settings.MARIO_HEIGHT
-            else:
-                w, h = common_settings.MEGAMAN_WIDTH, common_settings.MEGAMAN_HEIGHT
-            self.width_entry.delete(0, tk.END)
-            self.width_entry.insert(0, str(w))
-            self.height_entry.delete(0, tk.END)
-            self.height_entry.insert(0, str(h)) '''
 
     def update_caption(self):
         self.selected_phrases = [phrase for phrase, var in self.checkbox_vars.items() if var.get()]
@@ -586,12 +535,7 @@ class CaptionBuilder(ParentBuilder):
                 
                 self.generated_images.append(pil_img)
                 img_tk = ImageTk.PhotoImage(pil_img)
-                if game_selected == 'Mario':
-                    compare_score, exact_matches, partial_matches, excess_phrases = compare_captions(prompt, actual_caption, return_matches=True, debug=self.debug_caption.get())
-                elif game_selected == 'Lode Runner':
-                    compare_score, exact_matches, partial_matches, excess_phrases = lr_compare_captions(prompt, actual_caption, return_matches=True, debug=self.debug_caption.get())
-                else:
-                    compare_score, exact_matches, partial_matches, excess_phrases = mm_compare_captions(prompt, actual_caption, return_matches=True, debug=self.debug_caption.get())
+                compare_score, exact_matches, partial_matches, excess_phrases = compare_captions(prompt, actual_caption, return_matches=True, debug=self.debug_caption.get())
 
             except Exception as e:
                 messagebox.showerror(
@@ -678,7 +622,7 @@ Average Segment Score: {avg_segment_score}"""
             button_frame = ttk.Frame(img_frame)
             button_frame.pack(pady=5)
     
-            is_mario = game_selected == "Mario"
+            is_mario = game_selected == "Mario Maker (MM)"
 
             # Add Play button
             play_button = ttk.Button(
@@ -867,35 +811,19 @@ Average Segment Score: {avg_segment_score}"""
                 tensor = torch.tensor(self.current_levels[idx_or_scene])
                 scene = torch.argmax(tensor, dim=0).numpy().tolist()
 
-            if game_selected == "Lode Runner":
-                tile_numbers = [[int(num) % len(self.id_to_char) for num in row] for row in scene]
-                level = SampleOutput(level=tile_numbers, use_snes_graphics=use_snes_graphics)
-            else:
-                char_grid = scene_to_ascii(scene, self.id_to_char)
-                level = SampleOutput(level=char_grid, use_snes_graphics=use_snes_graphics)
+            char_grid = scene_to_ascii(scene, self.id_to_char)
+            level = SampleOutput(level=char_grid, use_snes_graphics=use_snes_graphics)
             return level
         else:
             # Assume idx_or_scene is a scene (list of lists of tile indices)
             scene = idx_or_scene
-            if game_selected == "Lode Runner":
-                tile_numbers = [[int(num) % len(self.id_to_char) for num in row] for row in scene]
-                level = SampleOutput(level=tile_numbers, use_snes_graphics=use_snes_graphics)
-            else:
-                char_grid = scene_to_ascii(scene, self.id_to_char)
-                level = SampleOutput(level=char_grid, use_snes_graphics=use_snes_graphics)
+            char_grid = scene_to_ascii(scene, self.id_to_char)
+            level = SampleOutput(level=char_grid, use_snes_graphics=use_snes_graphics)
             return level
       
     def play_level(self, idx):
-        selected_game = self.game_var.get()
-        if selected_game == "Lode Runner":
-            import tempfile, json
-            level = self.get_sample_output(idx, use_snes_graphics=self.use_snes_graphics.get())
-            #print("Level to play:", level)
-            level.play(game="loderunner", level_idx=1)
-        else:
-            #Default: Mario play logic
-            level = self.get_sample_output(idx, use_snes_graphics=self.use_snes_graphics.get())
-            level.play()
+        level = self.get_sample_output(idx, use_snes_graphics=self.use_snes_graphics.get())
+        level.play()
 
     def edit_level(self, idx):
         scene = self.generated_scenes[idx]
@@ -927,15 +855,8 @@ Average Segment Score: {avg_segment_score}"""
         scene = self.generated_scenes[idx]
         prompt = self._get_current_prompt()
 
-        if game_selected == 'Mario':
-            actual_caption = assign_caption(scene, self.id_to_char, self.char_to_id, self.tile_descriptors, False, False)
-            compare_score, exact_matches, partial_matches, excess_phrases = compare_captions(prompt, actual_caption, return_matches=True, debug=self.debug_caption.get())
-        elif game_selected == 'Lode Runner':
-            actual_caption = lr_assign_caption(scene, self.id_to_char, self.char_to_id, self.tile_descriptors, False, False)
-            compare_score, exact_matches, partial_matches, excess_phrases = lr_compare_captions(prompt, actual_caption, return_matches=True, debug=self.debug_caption.get())
-        else:
-            actual_caption = mm_assign_caption(scene, self.id_to_char, self.char_to_id, self.tile_descriptors, False, False)
-            compare_score, exact_matches, partial_matches, excess_phrases = mm_compare_captions(prompt, actual_caption, return_matches=True, debug=self.debug_caption.get())
+        actual_caption = assign_caption(scene, self.id_to_char, self.char_to_id, self.tile_descriptors, False, False)
+        compare_score, exact_matches, partial_matches, excess_phrases = compare_captions(prompt, actual_caption, return_matches=True, debug=self.debug_caption.get())
 
         avg_segment_score = None
 
@@ -964,7 +885,7 @@ Average Segment Score: {avg_segment_score}"""
         score_label.config(text=score_label_text)
 
     def _render_scene_image(self, scene): 
-        game_name = "Mario"
+        game_name = "Mario Maker (MM)"
         num_classes = common_settings.MARIO_TILE_COUNT
 
         one_hot = torch.nn.functional.one_hot(
@@ -1048,7 +969,7 @@ Average Segment Score: {avg_segment_score}"""
             self.negative_prompt_entry.config(state=tk.NORMAL)
 
     def update_mario_only_buttons(self):
-        is_mario = self.game_var.get() == "Mario"
+        is_mario = self.game_var.get() == "Mario Maker (MM)"
         state = tk.NORMAL if is_mario else tk.DISABLED
         self.play_composed_button.config(state=state)
         self.astar_composed_button.config(state=state)
@@ -1114,12 +1035,6 @@ class LevelEditor:
         self.master.destroy()
 
     def _load_tile_images(self, game):
-        if game == "Lode Runner":
-            return lr_tiles()
-        elif game == "Mega Man (Simple)":
-            return mm_tiles("MM-Simple")
-        elif game == "Mega Man (Full)":
-            return mm_tiles("MM-Full")
         return mario_tiles()
 
 import argparse
@@ -1128,19 +1043,19 @@ def parse_args():
     parser.add_argument(
         "--game",
         type=str,
-        default="Mario",
-        choices=["Mario", "LR", "MM-Simple", "MM-Full"],
+        default="Mario Maker (MM)",
+        choices=["Mario Maker (MM)"],
         help="Which game to create a model for (affects sample style and tile count)"
     )
     parser.add_argument("--model_path", type=str, help="Path to the trained diffusion model")
-    parser.add_argument("--load_data", type=str, default="datasets/Mar1and2_LevelsAndCaptions-regular.json", help="Path to the dataset JSON file")
+    parser.add_argument("--load_data", type=str, default="datasets/MM_LevelsAndCaptions-regular.json", help="Path to the dataset JSON file")
     parser.add_argument("--tileset", default=common_settings.MARIO_TILESET, help="Descriptions of individual tile types")
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.game == "Mario":
-        game_selected = "Mario"
+    if args.game == "Mario Maker (MM)":
+        game_selected = "Mario Maker (MM)"
         tileset_path = common_settings.MARIO_TILESET
 
     root = tk.Tk()
