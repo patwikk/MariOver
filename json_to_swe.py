@@ -296,6 +296,29 @@ OBJ_ID_MAP = {
     132: "obj_spring_res",          # ON/OFF Trampoline (approx)
 }
 
+# MM2 items inside blocks: MM2 block `cid` value -> SMMWE S4 `sprout` value.
+# In MM2 JSON, a block's `cid` field directly stores the MM2 object id of the
+# item inside (e.g. cid=20 = Super Mushroom, cid=44 = Style Power-up A).
+# The item is NOT a separate entry in objects[]; only the block is in the list.
+# In SMMWE, the block's S4 `sprout` field encodes the item.
+# sprout=0 -> empty block. sprout=-1 -> multi-coin brick (from GML).
+# Verified sprout values from hand-made SMMWE test levels:
+#   1 = Super Mushroom (cid=20),  2 = Fire Flower (cid=34)
+#   -77 = Style Power-up A (cid=44),  -85 = Style Power-up B (cid=81)
+# Blocks with cid not in this map are emitted as empty blocks.
+BLOCK_SPROUT_MAP = {
+    8:   -1,   # Coin -> multi-coin block (from GML scr_edit_to_play)
+    20:   1,   # Super Mushroom (verified)
+    34:   2,   # Fire Flower (verified)
+    44: -77,   # Style Power-up A / Cape / Mega Mario (verified)
+    81: -85,   # Style Power-up B / Link (verified)
+    # 33: ?,  # 1-Up Mushroom -- sprout value not yet verified
+    # 35: ?,  # Super Star    -- sprout value not yet verified
+}
+
+# MM2 block ids that can contain items via cid link: Brick (4), Question (5), Hidden (29)
+_BLOCK_IDS = {4, 5, 29}
+
 # MM2 pipe direction (flag % 0x80) -> orientation, used by build_pipes to pick
 # which axis (xscl vs yscl) carries the pipe's length and to orient its
 # footprint anchor.
@@ -817,6 +840,16 @@ def build_objects(objects, gamestyle=3, consumed_plants=None):
     build_pipes / build_cannons / build_platform_objects and
     skipped here. consumed_plants is a set of id() values for Piranha
     Plants already folded into pipe S5 entries (msk=1) by build_pipes."""
+    # Pre-scan: for blocks, cid stores the MM2 item id directly (NOT an index
+    # into objects[]). Map cid -> sprout value for each block that has a known item.
+    # Items inside blocks are NOT separate objects[] entries; nothing is skipped.
+    block_sprouts = {}  # id(block_obj) -> sprout int
+    for o in objects:
+        if o.get("id") in _BLOCK_IDS:
+            sprout = BLOCK_SPROUT_MAP.get(o.get("cid", -1))
+            if sprout is not None:
+                block_sprouts[id(o)] = sprout
+
     out = []
     dropped = {}
     for o in objects:
@@ -867,6 +900,8 @@ def build_objects(objects, gamestyle=3, consumed_plants=None):
             entry["yy"] = yy - PX
             entry["dir"] = SKEWER_DIR.get(o.get("flag", 0) & SKEWER_CEILING_FLAG, 1)
             entry["rot"] = SKEWER_ROT.get(entry["dir"], 0)
+        if id(o) in block_sprouts:
+            entry["sprout"] = block_sprouts[id(o)]
         out.append(entry)
     return out, dropped
 
