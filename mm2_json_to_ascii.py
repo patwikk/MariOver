@@ -103,6 +103,7 @@ OBJ_META = {
     "Cape Feather":        ("¶", "#CC1111", CAT_ITEM),
     "Propeller Mushroom":  ("¶", "#CC1111", CAT_ITEM),
     # Style Power-up B (id 81) gamestyle variants — see resolve_obj_name()
+    "Link":                ("§", "#884488", CAT_ITEM),
     "Frog Suit":           ("§", "#884488", CAT_ITEM),
     "Power Balloon":       ("§", "#884488", CAT_ITEM),
     "Super Acorn":         ("§", "#884488", CAT_ITEM),
@@ -201,7 +202,7 @@ STYLE_POWERUP_NAMES = {
         21847: "Propeller Mushroom",  # NSMBU  -> Propeller Mario
     },
     "SMB2 Mushroom": {    # Slot B (id 81, since v3.0.0)
-        12621: "SMB2 Mushroom",       # SMB1   -> Mini Mario
+        12621: "Link",                 # SMB1   -> Link Mario (Master Sword)
         13133: "Frog Suit",           # SMB3   -> Frog Mario
         22349: "Power Balloon",        # SMW    -> Balloon Mario
         21847: "Super Acorn",          # NSMBU  -> Flying Squirrel Mario

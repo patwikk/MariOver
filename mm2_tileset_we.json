@@ -58,6 +58,7 @@
         "¤" : ["passable", "collectable", "power-up", "star"],
         "M" : ["passable", "collectable", "power-up", "mushroom"],
         "¶" : ["passable", "collectable", "power-up", "style power-up", "big mushroom", "super leaf", "cape feather", "propeller mushroom"],
+        "§" : ["passable", "collectable", "power-up", "style power-up", "link", "frog suit", "power balloon", "super acorn"],
         "¦" : ["passable", "collectable", "p switch"],
         "¯" : ["passable", "collectable", "pow"],
         "±" : ["passable", "collectable", "spring"],

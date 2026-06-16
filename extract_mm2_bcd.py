@@ -198,7 +198,6 @@ OBJ_ID = {
 # cause that level to be skipped during extraction, the same way 3D World
 # levels are skipped. Add more names from OBJ_ID above as needed.
 SKIP_ITEM_NAMES = [
-    "smb2_mushroom",
     "fast_conveyor_belt",
     "conveyor_belt",
     "track",

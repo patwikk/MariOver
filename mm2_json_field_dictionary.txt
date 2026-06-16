@@ -238,16 +238,16 @@ just these two slots reinterpreted per gamestyle_raw.
 
   gamestyle_raw   Slot A (id 44, since v1.0.0)   Slot B (id 81, since v3.0.0)
   -------------   ---------------------------    ----------------------------
-  12621  SMB1     Big Mushroom -> Mega Mario     SMB2 Mushroom -> Mini Mario
+  12621  SMB1     Big Mushroom -> Mega Mario     Link (Master Sword) -> Link Mario
   13133  SMB3     Super Leaf -> Raccoon Mario    Frog Suit -> Frog Mario
   22349  SMW      Cape Feather -> Cape Mario     Power Balloon -> Balloon Mario
   21847  NSMBU    Propeller Mushroom -> Propeller Mario   Super Acorn -> Flying Squirrel Mario
 
   
 
-Slot B (id 81) did not exist before v3.0.0 and is currently in the
-extract_mm2_bcd.py skip list as "SMB2 Mushroom" (see replacements.md) --
-levels containing it are skipped entirely rather than mis-converted.
+Slot B (id 81) did not exist before v3.0.0. All four gamestyle variants
+(Link, Frog Suit, Power Balloon, Super Acorn) share the same SMMWE slot
+(obj_SMB2_mushroom_res); SMMWE renders the correct variant per gamestyle.
 
 mm2_viewer_json.py and mm2_json_to_ascii.py resolve the gamestyle-correct
 name via STYLE_POWERUP_NAMES / resolve_obj_name() before doing OBJ_META

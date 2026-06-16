@@ -240,7 +240,7 @@ OBJ_ID_MAP = {
     78:  "obj_pokey_res",           # Pokey
     79:  "obj_pblock_res",          # P Block
     80:  "obj_expandplatf_res",     # Sprint Platform (approx)
-    81:  "obj_SMB2_mushroom_res",   # SMB2 Mushroom
+    # 81 Style Power-up B -> see STYLE_POWERUP_B_MAP (gamestyle-dependent)
     82:  "obj_donut_res",           # Donut Block Platform
     83:  "obj_skewer_res",          # Skewer
     84:  None,                      # Snake Block
@@ -353,8 +353,18 @@ ONOFF_SWE_IDS = {
 # Other gamestyles are unverified; SMB3 Super Leaf and NSMBU Propeller Mushroom
 # are dropped rather than silently shown as the wrong object.
 STYLE_POWERUP_A_MAP = {
-    0: "obj_mushroom_res",   # SMB1: Big Mushroom -> Mega Mario (best-effort fallback)
-    2: "obj_cap_res",        # SMW: Cape Feather -> Cape Mario  (verified)
+    0: "obj_mushroom_res",       # SMB1: Big Mushroom -> Mega Mario (best-effort fallback)
+    2: "obj_cap_res",            # SMW: Cape Feather -> Cape Mario  (verified)
+}
+
+# MM2 id=81 (Style Power-up B) maps to the same SMMWE slot across all gamestyles:
+# SMB1 (Link), SMB3 (Frog Suit), SMW (Power Balloon), NSMBU (Super Acorn)
+# all share obj_SMB2_mushroom_res; SMMWE shows the correct variant per gamestyle.
+STYLE_POWERUP_B_MAP = {
+    0: "obj_SMB2_mushroom_res",  # SMB1: Link (Master Sword)
+    1: "obj_SMB2_mushroom_res",  # SMB3: Frog Suit
+    2: "obj_SMB2_mushroom_res",  # SMW: Power Balloon
+    3: "obj_SMB2_mushroom_res",  # NSMBU: Super Acorn
 }
 
 # Constant/default fields for an S5 pipe entry, taken verbatim from a
@@ -708,7 +718,11 @@ def build_ground(ground):
 
 
 def build_pipes(objects):
-    """MM2 pipes (id 9) -> SWE S5 entries.
+    """MM2 pipes (id 9) -> SWE S5 entries. Returns (s5_list, consumed_plants).
+
+    consumed_plants is a set of id() values for Piranha Plant (id=2) objects
+    that have been folded into an upward pipe via msk=1 and must not be
+    emitted as standalone S4 objects by build_objects.
 
     Reverse-engineered from four hand-placed length-4 pipes (one per
     direction) saved directly from the SMMWE editor -- both earlier S5
@@ -736,7 +750,14 @@ def build_pipes(objects):
     top-left (base_col, base_row), matching the formula below) -- but the
     resulting absolute placement against terrain is not yet in-game
     verified for R/D/L."""
+    # Piranha plant (id=2) lookup by tile cell for msk=1 detection.
+    plant_by_cell = {}
+    for o in objects:
+        if o.get("id") == 2:
+            plant_by_cell.setdefault((o["x"] // SUBPX, o["y"] // SUBPX), o)
+
     out = []
+    consumed_plants = set()
     for o in objects:
         if o.get("id") != 9:
             continue
@@ -772,27 +793,42 @@ def build_pipes(objects):
             "t_x_pos": xx + 2 * PX,
             "t_y_pos": yy + 2 * PX if direction == "U" else yy,
         })
+        # Piranha plant inside an upward pipe: any id=2 at or one tile above
+        # the pipe mouth (cols base_col/base_col+1, rows row_top/row_top+1)
+        # becomes msk=1 instead of a separate S4 obj_pplant_res.
+        if direction == "U":
+            for dc in (0, 1):
+                for dr in (0, 1):
+                    plant = plant_by_cell.get((base_col + dc, row_top + dr))
+                    if plant is not None:
+                        entry["msk"] = 1
+                        consumed_plants.add(id(plant))
         out.append(entry)
-    return out
+    return out, consumed_plants
 
 
 # MM2 object ids handled by dedicated builders, not the generic S4 path.
 _NON_S4_IDS = {9, 11, 13, 14, 16, 17, 47, 49, 55, 91}  # 9=Pipe (S5), 55=Door (S8), 11/13/14/16/17/47/49/91 -> S6/S7 (see below)
 
 
-def build_objects(objects, gamestyle=3):
+def build_objects(objects, gamestyle=3, consumed_plants=None):
     """MM2 objects[] -> SWE S4. Returns (s4_list, dropped_counts).
     Pipes (id 9) and the S6/S7 special cases (13/16/47) are handled by
     build_pipes / build_cannons / build_platform_objects and
-    skipped here."""
+    skipped here. consumed_plants is a set of id() values for Piranha
+    Plants already folded into pipe S5 entries (msk=1) by build_pipes."""
     out = []
     dropped = {}
     for o in objects:
         oid = o.get("id")
         if oid in _NON_S4_IDS or oid in _SLOPE_IDS:
             continue
+        if consumed_plants and oid == 2 and id(o) in consumed_plants:
+            continue
         if oid == 44:
             swe_id = STYLE_POWERUP_A_MAP.get(gamestyle)
+        elif oid == 81:
+            swe_id = STYLE_POWERUP_B_MAP.get(gamestyle)
         elif oid in ONOFF_SWE_IDS:
             off_id, on_id = ONOFF_SWE_IDS[oid]
             swe_id = on_id if o.get("flag", 0) & ONOFF_COLOR_FLAG else off_id
@@ -1104,8 +1140,8 @@ def build_world(j, *, user, name, desc, date_str, time_str):
     objects = j.get("objects", [])
     gamestyle = GAMESTYLE_MAP.get(j.get("gamestyle_raw", 0), 3)
     theme = THEME_MAP.get(j.get("theme_raw", 0), "overworld")
-    s4, dropped = build_objects(objects, gamestyle)
-    s5 = build_pipes(objects)
+    s5, consumed_plants = build_pipes(objects)
+    s4, dropped = build_objects(objects, gamestyle, consumed_plants)
     s8 = build_doors(objects)
 
     # Slopes have no SWE equivalent -- fill their footprint in as solid ground.
