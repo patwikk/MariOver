@@ -53,7 +53,7 @@ _MM2_OBJ_NAMES = {
     "?": "? Block",         "h": "Hidden Block",         "N": "Note Block",
     "d": "Donut Block",     "I": "Ice Block",            "p": "P Block",
     "O": "ON/OFF Block",    ".": "Dotted-Line Block",    "*": "Blinking Block",
-    "^": "Spike Block",     "C": "Crate",                "S": "Stone",
+    "Ç": "Spike Block",     "C": "Crate",                "S": "Stone",
     "{": "Starting Brick",  "=": "Castle Bridge",        "T": "Tree",
     "/": "Slight Slope",    "\\": "Steep Slope",
     # doors / warps
@@ -94,7 +94,7 @@ _MM2_OBJ_NAMES = {
     "Â": "Half-Collision Platform", "Ã": "Donut",
     # hazards
     "Ä": "Fire Bar",        "Å": "Saw",                  "Æ": "Burner",
-    "Ç": "Spikes",          "È": "Spike Ball",           "É": "Skewer",
+    "^": "Spikes",          "È": "Spike Ball",           "É": "Skewer",
     "Ê": "Twister",         "Ë": "Icicle",
     # decoration / other
     "Ì": "Cloud",           "Í": "Vine",                 "Î": "Water Marker",
@@ -302,21 +302,18 @@ def evaluate_json_dataset(json_path, id_to_char, char_to_name, tile_names):
     presence_counts = stats["scene_presence_counts"]
     num_scenes = stats["num_scenes"]
 
-    present_tiles = sorted(
-        (n for n in tile_names if counts.get(n, 0) > 0),
-        key=lambda n: -counts[n],
-    )
+    all_tiles = sorted(tile_names, key=lambda n: -counts.get(n, 0))
 
     result = {
         "source": json_path,
         "num_scenes": num_scenes,
         "total_tiles": total,
-        "tile_counts": {n: counts[n] for n in present_tiles},
-        "tile_percentages": {n: round(stats["tile_percentages"][n], 2) for n in present_tiles} if total else {},
-        "scene_presence_counts": {n: presence_counts.get(n, 0) for n in present_tiles},
+        "tile_counts": {n: counts.get(n, 0) for n in all_tiles},
+        "tile_percentages": {n: round(stats["tile_percentages"].get(n, 0.0), 2) for n in all_tiles} if total else {n: 0.0 for n in all_tiles},
+        "scene_presence_counts": {n: presence_counts.get(n, 0) for n in all_tiles},
         "scene_presence_percentages": {
-            n: round(stats["scene_presence_percentages"].get(n, 0.0), 2) for n in present_tiles
-        } if num_scenes else {},
+            n: round(stats["scene_presence_percentages"].get(n, 0.0), 2) for n in all_tiles
+        } if num_scenes else {n: 0.0 for n in all_tiles},
     }
 
     base, _ = os.path.splitext(json_path)
@@ -325,8 +322,8 @@ def evaluate_json_dataset(json_path, id_to_char, char_to_name, tile_names):
         json.dump(result, f, indent=2)
 
     summary = "  ".join(
-        f"{n}={counts[n]} ({result['tile_percentages'][n]:.1f}%)"
-        for n in present_tiles
+        f"{n}={counts.get(n, 0)} ({result['tile_percentages'][n]:.1f}%)"
+        for n in all_tiles if counts.get(n, 0) > 0
     )
     print(f"\n{json_path} - Tile Distribution ({num_scenes} samples, {total} tiles)")
     print(f"  {summary}")
@@ -335,7 +332,7 @@ def evaluate_json_dataset(json_path, id_to_char, char_to_name, tile_names):
 
 def write_distribution(path, header, counts, total, tile_names):
     """Write a readable distribution file sorted by frequency."""
-    present = [(n, counts.get(n, 0)) for n in tile_names if counts.get(n, 0) > 0]
+    present = [(n, counts.get(n, 0)) for n in tile_names]
     present.sort(key=lambda x: -x[1])
     col_width = max((len(n) for n, _ in present), default=10) + 2
     with open(path, 'w') as f:
@@ -508,18 +505,18 @@ def evaluate_epoch_vs_dataset(epoch_dir, json_path, id_to_char, char_to_name, ti
         "model": {
             "num_scenes": model_stats["num_scenes"],
             "total_tiles": model_stats["total_tiles"],
-            "tile_counts": model_stats["tile_counts"],
-            "tile_percentages": {n: round(v, 2) for n, v in model_stats["tile_percentages"].items()},
-            "scene_presence_counts": model_stats["scene_presence_counts"],
-            "scene_presence_percentages": {n: round(v, 2) for n, v in model_stats["scene_presence_percentages"].items()},
+            "tile_counts": {n: model_stats["tile_counts"].get(n, 0) for n in tile_names},
+            "tile_percentages": {n: round(model_stats["tile_percentages"].get(n, 0.0), 2) for n in tile_names},
+            "scene_presence_counts": {n: model_stats["scene_presence_counts"].get(n, 0) for n in tile_names},
+            "scene_presence_percentages": {n: round(model_stats["scene_presence_percentages"].get(n, 0.0), 2) for n in tile_names},
         },
         "dataset": {
             "num_scenes": dataset_stats["num_scenes"],
             "total_tiles": dataset_stats["total_tiles"],
-            "tile_counts": dataset_stats["tile_counts"],
-            "tile_percentages": {n: round(v, 2) for n, v in dataset_stats["tile_percentages"].items()},
-            "scene_presence_counts": dataset_stats["scene_presence_counts"],
-            "scene_presence_percentages": {n: round(v, 2) for n, v in dataset_stats["scene_presence_percentages"].items()},
+            "tile_counts": {n: dataset_stats["tile_counts"].get(n, 0) for n in tile_names},
+            "tile_percentages": {n: round(dataset_stats["tile_percentages"].get(n, 0.0), 2) for n in tile_names},
+            "scene_presence_counts": {n: dataset_stats["scene_presence_counts"].get(n, 0) for n in tile_names},
+            "scene_presence_percentages": {n: round(dataset_stats["scene_presence_percentages"].get(n, 0.0), 2) for n in tile_names},
         },
     }
     summary_path = os.path.join(out_dir, "comparison_summary.json")
@@ -679,7 +676,7 @@ def main():
             presence_history.append({
                 "epoch": epoch,
                 "num_scenes": num_scenes,
-                "presence": presence_counts,
+                "presence": {n: presence_counts.get(n, 0) for n in tile_names},
             })
             with open(presence_history_path, 'w') as f:
                 json.dump(presence_history, f, indent=2)
