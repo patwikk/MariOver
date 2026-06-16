@@ -210,19 +210,32 @@ SKIP_OBJECT_IDS = {OBJ_ID[name] for name in SKIP_ITEM_NAMES}
 
 # Layout of the "map" (overworld/subworld) structure within the decoded
 # payload, derived from level.ksy.
-OVERWORLD_OFFSET     = 512      # start of the overworld map
-MAP_OBJECT_COUNT_OFF = 28        # s4 object_count, relative to map start
-MAP_OBJECTS_OFF      = 72        # start of the fixed-size objects array
-MAP_OBJ_ENTRY_SIZE   = 32        # bytes per `obj` entry
-MAP_OBJ_ID_OFF       = 24        # offset of `id` (s2) within an obj entry
-MAP_MAX_OBJECTS      = 2600      # fixed array length (level.ksy)
-MAP_SIZE             = 188128    # total size of one map (overworld/subworld)
-SUBWORLD_OFFSET      = OVERWORLD_OFFSET + MAP_SIZE
+OVERWORLD_OFFSET          = 512      # start of the overworld map
+MAP_OBJECT_COUNT_OFF      = 28       # s4 object_count, relative to map start
+MAP_SNAKE_BLOCK_COUNT_OFF = 36       # s4 snake_block_count (level.ksy)
+MAP_TRACK_BLOCK_COUNT_OFF = 52       # s4 track_block_count (level.ksy)
+MAP_TRACK_COUNT_OFF       = 64       # s4 track_count (level.ksy)
+MAP_OBJECTS_OFF           = 72       # start of the fixed-size objects array
+MAP_OBJ_ENTRY_SIZE        = 32       # bytes per `obj` entry
+MAP_OBJ_ID_OFF            = 24       # offset of `id` (s2) within an obj entry
+MAP_MAX_OBJECTS           = 2600     # fixed array length (level.ksy)
+MAP_SIZE                  = 188128   # total size of one map (overworld/subworld)
+SUBWORLD_OFFSET           = OVERWORLD_OFFSET + MAP_SIZE
+
+# Tracks, snake blocks, and track blocks are stored in dedicated arrays, NOT
+# as regular obj entries — so they have no obj_id in the objects array.
+# Map these item names to the count field offset that reliably detects them.
+_COUNT_FIELD_NAMES = {
+    "track":       MAP_TRACK_COUNT_OFF,
+    "snake_block": MAP_SNAKE_BLOCK_COUNT_OFF,
+    "track_block": MAP_TRACK_BLOCK_COUNT_OFF,
+}
+SKIP_COUNT_OFFSETS = {
+    off for name, off in _COUNT_FIELD_NAMES.items() if name in SKIP_ITEM_NAMES
+}
 
 
 def _map_object_ids(plaintext: bytes, map_offset: int):
-    """Yield every object id present in the map (overworld/subworld) starting
-    at map_offset within the decoded payload."""
     object_count = struct.unpack_from("<i", plaintext, map_offset + MAP_OBJECT_COUNT_OFF)[0]
     object_count = max(0, min(object_count, MAP_MAX_OBJECTS))
     base = map_offset + MAP_OBJECTS_OFF
@@ -231,11 +244,10 @@ def _map_object_ids(plaintext: bytes, map_offset: int):
 
 
 def level_contains_skip_object(plaintext: bytes) -> bool:
-    """Return True if the level's overworld or subworld contains any object
-    whose id is in SKIP_OBJECT_IDS."""
-    if not SKIP_OBJECT_IDS:
-        return False
     for map_offset in (OVERWORLD_OFFSET, SUBWORLD_OFFSET):
+        for off in SKIP_COUNT_OFFSETS:
+            if struct.unpack_from("<i", plaintext, map_offset + off)[0] > 0:
+                return True
         for obj_id in _map_object_ids(plaintext, map_offset):
             if obj_id in SKIP_OBJECT_IDS:
                 return True
@@ -420,8 +432,7 @@ def parse_args():
     p.add_argument("--skip_3dworld", action="store_true",
                    help="Skip levels whose gamestyle is Super Mario 3D World")
     p.add_argument("--skip_items", action="store_true",
-                   help="Skip levels containing any object listed in SKIP_ITEM_NAMES "
-                        "(default: SMB2 Mushroom)")
+                   help="Skip levels containing any object listed in SKIP_ITEM_NAMES")
     return p.parse_args()
 
 # python extract_mm2_bcd.py --name "mario" --name_count 25
