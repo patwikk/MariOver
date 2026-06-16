@@ -202,7 +202,7 @@ OBJ_ID_MAP = {
     41:  "obj_boo_res",             # Boo
     42:  None,                      # Clown Car -> obj_clown_res / obj_clown_fire_res, see ONOFF_SWE_IDS
     43:  "obj_pinchos_res",         # Spike Trap
-    44:  "obj_mushroom_res",        # Big Mushroom (approx; see scl)
+    44:  None,                      # Style Power-up A -> see STYLE_POWERUP_A_MAP (gamestyle-dependent)
     45:  "obj_egg_res",              # Shoe Goomba / Yoshi's Egg -> obj_egg_res (green Yoshi); works for SMB1/SMB3/SMW/NSMBU
     46:  "obj_drybones_res",        # Dry Bones
     # 47 Cannon -> S6 "obj_cannon_res", see build_cannons
@@ -345,6 +345,16 @@ ONOFF_SWE_IDS = {
     42:  ("obj_clown_res",           "obj_clown_fire_res"),
     99:  ("obj_onoffblock_res",      "obj_onoffblock_blue_res"),
     100: ("obj_onoffplatform_blue_res", "obj_onoffplatform_res"),
+}
+
+# MM2 id=44 (Style Power-up A) maps to a different SMMWE object per gamestyle.
+# SWE gamestyle int (see GAMESTYLE_MAP) -> swe_id string.
+# gamestyle=2 (SMW): Cape Feather -> obj_cap_res (verified from "cape example .swe").
+# Other gamestyles are unverified; SMB3 Super Leaf and NSMBU Propeller Mushroom
+# are dropped rather than silently shown as the wrong object.
+STYLE_POWERUP_A_MAP = {
+    0: "obj_mushroom_res",   # SMB1: Big Mushroom -> Mega Mario (best-effort fallback)
+    2: "obj_cap_res",        # SMW: Cape Feather -> Cape Mario  (verified)
 }
 
 # Constant/default fields for an S5 pipe entry, taken verbatim from a
@@ -770,7 +780,7 @@ def build_pipes(objects):
 _NON_S4_IDS = {9, 11, 13, 14, 16, 17, 47, 49, 55, 91}  # 9=Pipe (S5), 55=Door (S8), 11/13/14/16/17/47/49/91 -> S6/S7 (see below)
 
 
-def build_objects(objects):
+def build_objects(objects, gamestyle=3):
     """MM2 objects[] -> SWE S4. Returns (s4_list, dropped_counts).
     Pipes (id 9) and the S6/S7 special cases (13/16/47) are handled by
     build_pipes / build_cannons / build_platform_objects and
@@ -781,7 +791,9 @@ def build_objects(objects):
         oid = o.get("id")
         if oid in _NON_S4_IDS or oid in _SLOPE_IDS:
             continue
-        if oid in ONOFF_SWE_IDS:
+        if oid == 44:
+            swe_id = STYLE_POWERUP_A_MAP.get(gamestyle)
+        elif oid in ONOFF_SWE_IDS:
             off_id, on_id = ONOFF_SWE_IDS[oid]
             swe_id = on_id if o.get("flag", 0) & ONOFF_COLOR_FLAG else off_id
         else:
@@ -791,8 +803,7 @@ def build_objects(objects):
             dropped[name] = dropped.get(name, 0) + 1
             continue
         col, row = object_cell(o)
-        # Big variants (Big Mushroom etc.) -> scale 2, everything else 1.
-        scl = 2 if oid == 44 else 1
+        scl = 1
         yy = (FIELD_HEIGHT_TILES - 1 - row) * PX - OBJ_Y_OFFSET_PX.get(oid, 0)
         if oid in OBJ_H_ANCHOR_TOP_IDS:
             h = max(1, o.get("h", 1))
@@ -1093,7 +1104,7 @@ def build_world(j, *, user, name, desc, date_str, time_str):
     objects = j.get("objects", [])
     gamestyle = GAMESTYLE_MAP.get(j.get("gamestyle_raw", 0), 3)
     theme = THEME_MAP.get(j.get("theme_raw", 0), "overworld")
-    s4, dropped = build_objects(objects)
+    s4, dropped = build_objects(objects, gamestyle)
     s5 = build_pipes(objects)
     s8 = build_doors(objects)
 

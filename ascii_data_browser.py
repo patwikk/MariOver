@@ -318,7 +318,7 @@ class TileViewer(tk.Tk):
     def load_files_from_paths(self, dataset_path, tileset_path):
         self.dataset_path = dataset_path
         try:
-            with open(dataset_path, 'r') as f:
+            with open(dataset_path, 'r', encoding='utf-8') as f:
                 self.dataset = json.load(f)
 
             # Normalize every sample to a dict with at least 'scene' and 'caption' keys.
