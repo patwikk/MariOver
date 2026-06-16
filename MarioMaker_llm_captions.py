@@ -350,74 +350,7 @@ ADDITIONAL RULES
 * Prefer concise captions over exhaustive tile inventories.
 * If a region has no notable features beyond the floor, do not add filler phrases.
 
-The worked examples below use single-character symbols purely for illustration.
-The symbol dictionary above defines the actual symbols used in the level grid.
-
----
-
-WORKED EXAMPLES
-
-Example 1:
-
-Symbol dictionary (excerpt): ' '=Air, '#'=Ground, 'g'=Goomba, '?'=Question Block, '|'=Pipe, 'up-arrow'=Pipe (Up)
-
-Metadata:
-Object tile counts:
-  Goomba: 2
-  Question Block: 2
-  Pipe (Up): 2
-  Pipe: 4
-Terrain column heights (left to right, 0=no terrain):
-  cols 01-10: 2 2 2 2 2 2 2 2 2 2
-  cols 11-20: 2 2 2 2 2 2 2 2 2 2
-Floor: present
-Ceiling: absent
-
-ASCII Level:
-
-  ?     ?
-
-  |     |
-  ^     ^
-  g         g
-####################
-####################
-
-Caption: flat ground floor. two question blocks left. two upward pipes on ground. two goombas on ground
-
----
-
-Example 2:
-
-Symbol dictionary (excerpt): ' '=Air, '#'=Ground, 'g'=Goomba, 'B'=Brick Block
-
-Metadata:
-Object tile counts:
-  Goomba: 1
-  Brick Block: 6
-Terrain column heights (left to right, 0=no terrain):
-  cols 01-10: 2 2 2 2 2 2 2 2 2 0
-  cols 11-20: 0 0 2 3 4 5 6 7 8 0
-Floor: present, gaps at: cols 10-12
-Ceiling: absent
-
-ASCII Level:
-
-
-               #
-              ##
-             ###
-            ####
-  g  BBBBBB #####
-##########   #####
-##########   #####
-
-Caption: flat ground floor left. gap center. ascending staircase right. brick block platform center. one goomba on ground left
-
----
-
 Symbol dictionary:
-
 {dict_string}
 
 
@@ -585,7 +518,7 @@ def call_ollama(prompt, model, url, timeout, retries):
     payload = json.dumps({
         "model": model,
         "prompt": prompt,
-        "stream": True,
+        "stream": False,
         "options": {
             "temperature": 0,
             "seed": 42
@@ -601,13 +534,8 @@ def call_ollama(prompt, model, url, timeout, retries):
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                chunks = []
-                for line in resp:
-                    chunk = json.loads(line.decode("utf-8"))
-                    chunks.append(chunk.get("response", ""))
-                    if chunk.get("done"):
-                        break
-                return "".join(chunks).strip()
+                result = json.loads(resp.read().decode("utf-8"))
+                return result.get("response", "").strip()
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             if attempt < retries - 1:
                 wait = min(2 ** attempt * 5, 60)
