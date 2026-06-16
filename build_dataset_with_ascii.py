@@ -230,7 +230,7 @@ def main():
                 if converter_mod is not None:
                     rows = converter_mod.convert_level(rows)
                     empty_char = " "
-                    print("SAMPLE ROW:", repr(rows[10]))  # print a middle row
+                    #print("SAMPLE ROW:", repr(rows[10]))  # print a middle row
                 else:
                     rows = [r.rstrip('\r\n') for r in rows]
                     while rows and not rows[0].strip():

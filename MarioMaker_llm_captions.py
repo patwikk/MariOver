@@ -585,7 +585,7 @@ def call_ollama(prompt, model, url, timeout, retries):
     payload = json.dumps({
         "model": model,
         "prompt": prompt,
-        "stream": False,
+        "stream": True,
         "options": {
             "temperature": 0,
             "seed": 42
@@ -601,12 +601,18 @@ def call_ollama(prompt, model, url, timeout, retries):
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                return result.get("response", "").strip()
+                chunks = []
+                for line in resp:
+                    chunk = json.loads(line.decode("utf-8"))
+                    chunks.append(chunk.get("response", ""))
+                    if chunk.get("done"):
+                        break
+                return "".join(chunks).strip()
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             if attempt < retries - 1:
-                print(f"  [RETRY {attempt + 1}/{retries - 1}] {e}")
-                time.sleep(3)
+                wait = min(2 ** attempt * 5, 60)
+                print(f"  [RETRY {attempt + 1}/{retries - 1}] {e} (waiting {wait}s)")
+                time.sleep(wait)
             else:
                 raise RuntimeError(
                     f"Ollama request failed after {retries} attempts: {e}"
@@ -780,8 +786,8 @@ def main():
     parser.add_argument(
         "--retries",
         type=int,
-        default=3,
-        help="Retry attempts on network failure. Default: 3",
+        default=10,
+        help="Retry attempts on network failure. Default: 10",
     )
     parser.add_argument(
         "--grid-format",
