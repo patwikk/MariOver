@@ -146,7 +146,7 @@ OBJ_META = {
     "Twister":             ("Ê", "#AADDFF", CAT_HAZARD),
     "Icicle":              ("Ë", "#AADDFF", CAT_HAZARD),
     # deco
-    "Cloud":               ("Ì", "#CCCCFF", CAT_DECO),
+    "Cloud":               ("Ì", "#CCCCFF", CAT_TERRAIN),
     "Vine":                ("Í", "#00BB00", CAT_DECO),
     "Water Marker":        ("Î", "#0055FF", CAT_DECO),
     "Arrow":               ("Ï", "#FFFF00", CAT_DECO),
@@ -166,6 +166,17 @@ OBJ_META = {
 
 GROUND_COLOR = "#8B6914"
 GROUND_CHAR  = "#"
+
+# ASCII export replacements: MM2 objects that convert to a different SWE object.
+# Mirrors the approximations in json_to_swe.py OBJ_SWE_IDS.
+ASCII_REPLACEMENTS = {
+    "Spike Top":           "s",  # → Spiny
+    "Fish Bone":           "~",  # → Cheep Cheep
+    "Lakitu's Cloud":      "Ô",  # → Clown Car
+    "Jumping Machine":     "±",  # → Spring
+    "Mushroom Trampoline": "±",  # → Spring
+    "ON/OFF Trampoline":   "±",  # → Spring
+}
 
 CAT_COLORS = {
     CAT_TERRAIN:  "#C8A050",
@@ -421,13 +432,6 @@ def normalize_level(lvl):
         return
 
     start_y = lvl.get("start_y",0)
-    objects.append({
-        "name":"Starting Brick",
-        "x":1*160+80,
-        "y":start_y*160,
-        "w":3,
-        "h":3
-    })
 
     for col in range(0,7):
         for row in range(0,start_y):
@@ -450,14 +454,6 @@ def normalize_level(lvl):
         objects.append({
             "name":"Goal","x":goal_col*160,"y":goal_y*160,"w":2,"h":4
         })
-        for i in range(14):
-            objects.append({
-                "name":"Castle Bridge",
-                "x":(goal_col-14+i)*160,
-                "y":(goal_y*160)-1,
-                "w":1,
-                "h":1
-            })
     else:
         objects.append({
             "name":"Goal","x":goal_col*160,"y":goal_y*160,"w":1,"h":11
@@ -515,8 +511,8 @@ def build_ascii_grid(level):
 
             char,_,_ = get_meta(resolve_obj_name(obj_name, level.get("gamestyle_raw", 0)))
 
-            if obj_name == "Pipe":
-                char = _PIPE_DIR_CHAR.get(_pipe_direction(obj.get("flag",0)), char)
+            if obj_name in ASCII_REPLACEMENTS:
+                char = ASCII_REPLACEMENTS[obj_name]
 
             if obj_name in _SLOPE_NAMES:
                 col, _ = obj_anchor(obj)

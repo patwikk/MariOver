@@ -197,6 +197,17 @@ GROUND_CHAR  = "#"
 # bbox claims — keeps the ASCII silhouette pixel-faithful to toost.
 UNKNOWN_CHAR = "▒"
 
+# ASCII export replacements: MM2 objects that convert to a different SWE object.
+# Mirrors the approximations in json_to_swe.py OBJ_SWE_IDS.
+ASCII_REPLACEMENTS = {
+    "Spike Top":           "s",  # → Spiny
+    "Fish Bone":           "~",  # → Cheep Cheep
+    "Lakitu's Cloud":      "Ô",  # → Clown Car
+    "Jumping Machine":     "±",  # → Spring
+    "Mushroom Trampoline": "±",  # → Spring
+    "ON/OFF Trampoline":   "±",  # → Spring
+}
+
 CAT_COLORS = {
     CAT_TERRAIN:  "#C8A050",
     CAT_ENEMY:    "#CC4444",
@@ -1138,8 +1149,8 @@ class MM2Viewer(tk.Tk):
                 if _pass_for(obj_name) != pass_n:
                     continue
                 char, _, _ = get_meta(resolve_obj_name(obj_name, lvl.get("gamestyle_raw", 0)))
-                if obj_name == "Lakitu's Cloud":
-                    char, _, _ = get_meta("Koopa Clown Car")
+                if obj_name in ASCII_REPLACEMENTS:
+                    char = ASCII_REPLACEMENTS[obj_name]
                 elif obj_name in _SLOPE_NAMES:
                     right_slope = (obj.get("flag", 0) & 0x100000) != 0
                     char = "/" if right_slope else "\\"
