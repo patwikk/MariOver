@@ -189,7 +189,7 @@ OBJ_ID_MAP = {
     28:  "obj_buzzybeetle_res",     # Buzzy Beetle
     29:  "obj_block_hidden_res",    # Hidden Block
     30:  "obj_lakitu_res",          # Lakitu
-    31:  "obj_nube_res",            # Lakitu's Cloud (approx)
+    31:  "obj_clown_res",           # Lakitu's Cloud -> Clown Car (nearest rideable vehicle)
     32:  "obj_billbanzai_res",      # Banzai Bill
     33:  "obj_1up_res",             # 1-Up Mushroom
     34:  "obj_fireflower_res",      # Fire Flower
@@ -414,7 +414,7 @@ OBJ_Y_OFFSET_PX = {
 # the MM2 footprint (col = x // SUBPX), matching _LEFT_ANCHOR in
 # mm2_viewer_json.py, instead of the generic centered formula
 # col = x // SUBPX - w // 2.
-OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 42, 49, 71, 72}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge, Clown Car / Koopa Car
+OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 31, 42, 49, 71, 72}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge, Lakitu's Cloud / Clown Car / Koopa Car
 
 # MM2 object ids whose `h` (tile height, growing UP from the (x,y) anchor at
 # the bottom row) is not represented by a stretched SWE sprite -- instead the
@@ -1252,30 +1252,22 @@ def find_companion(path: Path):
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Convert an MM2 level JSON into a Super Mario Maker "
-                    "Worldwide Engine (.swe) save file."
+        description="Convert an MM2 level JSON (or a folder of JSONs) into "
+                    "Super Mario Maker Worldwide Engine (.swe) save file(s)."
     )
-    p.add_argument("json_path", help="Path to a *_overworld.json (or plain) level JSON")
-    p.add_argument("-o", "--output", help="Output .swe path (default: <stem>.swe)")
+    p.add_argument("json_path", help="Path to a *_overworld.json, a plain level JSON, or a folder of JSONs")
+    p.add_argument("-o", "--output", help="Output .swe path (single-file) or output folder (folder mode)")
     p.add_argument("--user", default="patwick", help="Author name stored in the level")
-    p.add_argument("--name", default=None, help="Level name (default: JSON 'name')")
+    p.add_argument("--name", default=None, help="Level name (default: JSON 'name'); ignored in folder mode")
     p.add_argument("--desc", default=None, help="Description (default: JSON 'description')")
     p.add_argument("--height", type=int, default=FIELD_HEIGHT_TILES,
                    help=f"Playfield height in tiles (default {FIELD_HEIGHT_TILES})")
     return p.parse_args()
 
 
-def main():
-    global FIELD_HEIGHT_TILES
-    args = parse_args()
-    FIELD_HEIGHT_TILES = args.height
-
-    in_path = Path(args.json_path)
-    ow_path, sub_path, base = find_companion(in_path)
-    if ow_path is None and sub_path is None:
-        raise SystemExit(f"Could not find JSON data at {in_path}")
-
-    overworld_json = load_json(ow_path) if ow_path else load_json(in_path)
+def convert_one(ow_path, sub_path, base, args, out_dir=None):
+    """Convert one overworld+optional subworld pair to a .swe file."""
+    overworld_json = load_json(ow_path)
     subworld_json = load_json(sub_path) if sub_path else None
 
     now = datetime.now()
@@ -1292,12 +1284,17 @@ def main():
         for k, v in sub_dropped.items():
             dropped[k] = dropped.get(k, 0) + v
     else:
-        sb1 = {"S1": []}   # empty subworld, as the editor writes it
+        sb1 = {"S1": []}
 
     level = {"S0": s0, "SB1": sb1}
     data = encode_swe(level)
 
-    out_path = Path(args.output) if args.output else in_path.with_name(base + ".swe")
+    if out_dir is not None:
+        out_path = Path(out_dir) / (base + ".swe")
+    elif args.output:
+        out_path = Path(args.output)
+    else:
+        out_path = ow_path.with_name(base + ".swe")
     out_path.write_bytes(data)
 
     print(f"Wrote {out_path} ({len(data)} bytes)")
@@ -1312,6 +1309,41 @@ def main():
         print(f"  dropped {total} object(s) with no SMMWE equivalent:")
         for name_, n in sorted(dropped.items(), key=lambda kv: -kv[1]):
             print(f"      {n:4d}  {name_}")
+
+
+def main():
+    global FIELD_HEIGHT_TILES
+    args = parse_args()
+    FIELD_HEIGHT_TILES = args.height
+
+    in_path = Path(args.json_path)
+
+    if in_path.is_dir():
+        out_dir = Path(args.output) if args.output else in_path
+        out_dir.mkdir(parents=True, exist_ok=True)
+        seen_bases = set()
+        errors = 0
+        for json_file in sorted(in_path.glob("*.json")):
+            if json_file.stem.endswith("_subworld"):
+                continue  # picked up as companion of overworld
+            ow_path, sub_path, base = find_companion(json_file)
+            if base in seen_bases:
+                continue
+            seen_bases.add(base)
+            if ow_path is None:
+                print(f"Skipping {json_file.name}: no overworld JSON found")
+                continue
+            try:
+                convert_one(ow_path, sub_path, base, args, out_dir=out_dir)
+            except Exception as exc:
+                print(f"ERROR converting {json_file.name}: {exc}")
+                errors += 1
+        print(f"\nDone: {len(seen_bases)} level(s) processed, {errors} error(s).")
+    else:
+        ow_path, sub_path, base = find_companion(in_path)
+        if ow_path is None and sub_path is None:
+            raise SystemExit(f"Could not find JSON data at {in_path}")
+        convert_one(ow_path, sub_path, base, args)
 
 
 if __name__ == "__main__":
