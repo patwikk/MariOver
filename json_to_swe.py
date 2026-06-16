@@ -200,7 +200,7 @@ OBJ_ID_MAP = {
     39:  "obj_magikoopa_res",       # Magikoopa
     40:  "obj_spiny_res",           # Spike Top -> Spiny (approx)
     41:  "obj_boo_res",             # Boo
-    42:  "obj_clown_res",           # Clown Car
+    42:  None,                      # Clown Car -> obj_clown_res / obj_clown_fire_res, see ONOFF_SWE_IDS
     43:  "obj_pinchos_res",         # Spike Trap
     44:  "obj_mushroom_res",        # Big Mushroom (approx; see scl)
     45:  "obj_egg_res",              # Shoe Goomba / Yoshi's Egg -> obj_egg_res (green Yoshi); works for SMB1/SMB3/SMW/NSMBU
@@ -335,9 +335,15 @@ THWOMP_DIR = 1
 # NOTE: "obj_onoffblock_blue_res" (id 99 with flag&4 set) has no example in
 # the reference and is extrapolated from the verified obj_onoffplatform_res/
 # _blue_res pair for id 100.
+# MM2 flag bit 2 (0x4) selects between two SWE variants for several object
+# types. For ON/OFF blocks it chooses red vs blue; for Clown Car it chooses
+# regular vs fire. Tuple is (bit2-clear variant, bit2-set variant).
+# id=99/100 verified against "3000209_6 but right.swe" (73 objects exact match).
+# id=42 verified against "clown car regular.swe" / "clown car fire.swe".
 ONOFF_COLOR_FLAG = 1 << 2
 ONOFF_SWE_IDS = {
-    99:  ("obj_onoffblock_res", "obj_onoffblock_blue_res"),
+    42:  ("obj_clown_res",           "obj_clown_fire_res"),
+    99:  ("obj_onoffblock_res",      "obj_onoffblock_blue_res"),
     100: ("obj_onoffplatform_blue_res", "obj_onoffplatform_res"),
 }
 
@@ -365,7 +371,7 @@ OBJ_Y_OFFSET_PX = {
 # the MM2 footprint (col = x // SUBPX), matching _LEFT_ANCHOR in
 # mm2_viewer_json.py, instead of the generic centered formula
 # col = x // SUBPX - w // 2.
-OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 49, 71}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge
+OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 42, 49, 71, 72}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge, Clown Car / Koopa Car
 
 # MM2 object ids whose `h` (tile height, growing UP from the (x,y) anchor at
 # the bottom row) is not represented by a stretched SWE sprite -- instead the
