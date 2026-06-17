@@ -20,6 +20,7 @@ def parse_args():
     parser.add_argument("--inference_steps", type=int, default=common_settings.NUM_INFERENCE_STEPS, help="Number of denoising steps")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size for generation")
     parser.add_argument("--save_as_json", action="store_true", help="Save generated levels as JSON")
+    parser.add_argument("--json_per_sample", action="store_true", help="When saving JSON, write one file per sample instead of a single combined file")
     parser.add_argument("--level_width", type=int, default=None, help="Override model width in tiles")
     parser.add_argument(
         "--output_format",
@@ -121,9 +122,15 @@ def generate_levels(args):
 
     if args.save_as_json:
         scenes = samples_to_scenes(all_samples)
-        out_path = os.path.join(args.output_dir, "all_levels.json")
-        save_level_data(scenes, args.tileset, out_path, False, args.describe_absence, exclude_broken=False)
-        print(f"Saved {len(scenes)} captioned scenes to {out_path}")
+        if args.json_per_sample:
+            for i, scene in enumerate(scenes):
+                out_path = os.path.join(args.output_dir, f"level_{i:04d}.json")
+                save_level_data([scene], args.tileset, out_path, False, args.describe_absence, exclude_broken=False)
+            print(f"Saved {len(scenes)} captioned scenes to {args.output_dir} as individual JSON files")
+        else:
+            out_path = os.path.join(args.output_dir, "all_levels.json")
+            save_level_data(scenes, args.tileset, out_path, False, args.describe_absence, exclude_broken=False)
+            print(f"Saved {len(scenes)} captioned scenes to {out_path}")
 
 
 if __name__ == "__main__":
