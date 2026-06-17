@@ -365,6 +365,25 @@ THWOMP_DIR = 1
 # default orientation instead of the rotated one.
 ONEWAY_DIR_MAP = {0: 1, 1: 2, 2: 3, 3: 4}
 
+# obj_billbanzai_res needs `dir`/`rot`/`scl` set or the spawned obj_banzaibill
+# never moves: scr_edit_to_play copies direct = other.s_scaley, rotacion =
+# other.rotacion, direct_t = other.direct_t onto the play object, and the
+# generic S4 defaults (dir=0, rot=0, scl=1) apparently correspond to no
+# launch direction at all -- the generic-S4 path left every Banzai Bill
+# stationary. Confirmed against 4 hand-placed reference saves ("banzai
+# right/up/left/down.swe"): dir 1/2/3/4 = left/down/right/up, rot =
+# (dir-1)*90 (0/90/180/270, observed as 360/630/540/450 i.e. mod-360
+# equivalent -- editor rotation accumulates past 360 but only the
+# congruence class matters), and scl = 1 for left/down (dir 1/2) or -1 for
+# right/up (dir 3/4). MM2 encodes the 4 facings in flag bits 22-23, the
+# same bit field/encoding as One-Way Wall (ONEWAY_DIR_MAP); raw 0/1/2/3 is
+# assumed to map onto dir 1/2/3/4 by the same convention, though that
+# specific correspondence (vs. e.g. an offset/reversed mapping) isn't
+# independently confirmed since the 4 reference saves were hand-placed in
+# SMMWE directly rather than converted from a known MM2 source flag.
+BANZAI_DIR_MAP = {0: 1, 1: 2, 2: 3, 3: 4}
+BANZAI_SCL = {1: 1, 2: 1, 3: -1, 4: -1}
+
 # ON/OFF Block (99) / Dotted-Line Block (100) -> SWE S4 "ID", keyed by MM2
 # flag bit 2 (flag & 4), a shared red/blue "color" flag for both ids.
 # Verified exhaustively against "3000209_6 but right.swe": all 73 id-99/100
@@ -432,7 +451,7 @@ OBJ_Y_OFFSET_PX = {
 # the MM2 footprint (col = x // SUBPX), matching _LEFT_ANCHOR in
 # mm2_viewer_json.py, instead of the generic centered formula
 # col = x // SUBPX - w // 2.
-OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 31, 42, 49, 71, 72}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge, Lakitu's Cloud / Clown Car / Koopa Car
+OBJ_LEFT_ANCHOR_IDS = {14, 16, 17, 31, 42, 49, 67, 71, 72}  # Mushroom / Semisolid / Half-Collision Platform, Bridge / Castle Bridge, Lakitu's Cloud / Clown Car / Koopa Car, One-Way Wall
 
 # MM2 object ids whose `h` (tile height, growing UP from the (x,y) anchor at
 # the bottom row) is not represented by a stretched SWE sprite -- instead the
