@@ -338,73 +338,7 @@ def obj_anchor(obj: dict):
 # ---------------------------------------------------------------------------
 # Main viewer window
 # ---------------------------------------------------------------------------
-# Slope tile iterator
-# ---------------------------------------------------------------------------
 _SLOPE_NAMES = frozenset({"Slight Slope", "Steep Slope"})
-
-def slope_tiles(obj: dict):
-    """
-    Generate all solid terrain cells occupied by a Mario Maker slope.
-
-    ID 87 = Slight Slope (rise 1, run 2)
-    ID 88 = Steep Slope  (rise 1, run 1)
-
-    Direction bit:
-        flag & 0x100000 == 0  -> left slope
-        flag & 0x100000 != 0  -> right slope
-
-    Returns:
-        (col, row)
-    """
-
-    base_col, base_row = obj_anchor(obj)
-    w, h = obj_tile_size(obj)
-
-    if w <= 0 or h <= 0:
-        return
-
-    obj_id = obj["id"]
-
-    if obj_id == 87:
-        step = 2      # gentle slope
-    elif obj_id == 88:
-        step = 1      # steep slope
-    else:
-        return
-
-    right_slope = (obj.get("flag", 0) & 0x100000) != 0
-
-    for row in range(h):
-
-        if right_slope:
-            x_start = row * step
-            x_end = min(w, (row + 1) * step)
-
-            # fill behind the slope edge
-            fill_start = x_end
-            fill_end = w
-
-        else:
-            x_start = max(0, w - (row + 1) * step)
-            x_end = w - row * step
-
-            # fill behind the slope edge
-            fill_start = 0
-            fill_end = x_start
-
-        x_start = max(0, x_start)
-        x_end = min(w, x_end)
-
-        # slope cells
-        for x in range(x_start, x_end):
-            yield (
-                base_col + x,
-                base_row + (h - row - 1)
-            )
-
-    
-        
-    
 
 
 # ---------------------------------------------------------------------------
@@ -516,20 +450,18 @@ def build_ascii_grid(level):
                 char = ASCII_REPLACEMENTS[obj_name]
 
             if obj_name in _SLOPE_NAMES:
-                col, _ = obj_anchor(obj)
-                w, _ = obj_tile_size(obj)
-                right_slope = (obj.get("flag", 0) & 0x100000) != 0
-                slope_char = "/" if right_slope else "\\"
-                face_cells = list(slope_tiles(obj))
-                for tc, tr in face_cells:
-                    if right_slope:
-                        for fill_x in range(tc + 1, col + w):
-                            set_cell(fill_x, tr, GROUND_CHAR)
-                    else:
-                        for fill_x in range(col, tc):
-                            set_cell(fill_x, tr, GROUND_CHAR)
-                for tc, tr in face_cells:
-                    set_cell(tc, tr, slope_char)
+                # Slopes have no flat-ASCII diagonal equivalent, so fill their
+                # footprint as a solid ascending/descending staircase of
+                # ground -- mirrors slope_fill_cells() in json_to_swe.py.
+                col, row = obj_anchor(obj)
+                w, h = obj_tile_size(obj)
+                step = 2 if obj.get("id") == 87 else 1
+                descending = (obj.get("flag", 0) & 0x100000) != 0
+                for x in range(w):
+                    run = (w - x) if descending else (x + 1)
+                    height = min((run + step - 1) // step, h)
+                    for y in range(height):
+                        set_cell(col + x, row + y, GROUND_CHAR)
             elif obj_name == "Mushroom Platform":
                 col,row = obj_anchor(obj)
                 w,h = obj_tile_size(obj)

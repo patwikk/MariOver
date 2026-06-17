@@ -1152,9 +1152,6 @@ class MM2Viewer(tk.Tk):
                 char, _, _ = get_meta(resolve_obj_name(obj_name, lvl.get("gamestyle_raw", 0)))
                 if obj_name in ASCII_REPLACEMENTS:
                     char = ASCII_REPLACEMENTS[obj_name]
-                elif obj_name in _SLOPE_NAMES:
-                    right_slope = (obj.get("flag", 0) & 0x100000) != 0
-                    char = "/" if right_slope else "\\"
                 col, row = obj_anchor(obj)
                 w, h = obj_tile_size(obj)
                 if obj_name == "Bridge":
@@ -1162,6 +1159,19 @@ class MM2Viewer(tk.Tk):
                     # row above it is decorative and gets dropped.
                     for dx in range(w):
                         set_cell(col + dx, row, char)
+                    continue
+                if obj_name in _SLOPE_NAMES:
+                    # Slopes have no flat-ASCII diagonal equivalent, so fill
+                    # their footprint as a solid ascending/descending
+                    # staircase of ground -- mirrors slope_fill_cells() in
+                    # json_to_swe.py and the same fix in mm2_json_to_ascii.py.
+                    step = 2 if obj.get("id") == 87 else 1
+                    descending = (obj.get("flag", 0) & 0x100000) != 0
+                    for x in range(w):
+                        run = (w - x) if descending else (x + 1)
+                        height = min((run + step - 1) // step, h)
+                        for y in range(height):
+                            set_cell(col + x, row + y, GROUND_CHAR)
                     continue
                 # Claim the object's full bounding box; occ (toost's actual
                 # rendered pixels) carves out the real silhouette — slope
