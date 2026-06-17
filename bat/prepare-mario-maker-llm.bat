@@ -27,6 +27,11 @@ set TILESET=extended_tiles.json
 set RAW_OUTPUT=datasets\%GAME%_Levels-%TYPE%.json
 set CAPTIONED_OUTPUT=datasets\%GAME%_LevelsAndCaptions-%TYPE%.json
 
+REM -- Folder for the token-grid .txt files actually sent to the LLM, placed
+REM    next to the input ASCII folder/file.
+for %%I in ("%INPUT%") do set "INPUT_DIR=%%~dpI"
+set LLM_ASCII_DIR=%INPUT_DIR%ascii_tokens
+
 REM -- Ollama setup ---------------------------------------------------------
 ollama list >nul 2>&1
 if %ERRORLEVEL% neq 0 (
@@ -45,7 +50,7 @@ if %ERRORLEVEL% neq 0 (
 
 REM -- Pipeline ---------------------------------------------------------------
 python build_dataset_with_ascii.py --input_file %INPUT% --output %RAW_OUTPUT% --tileset %TILESET% --sliding_window --stride 20 --convert_to_extended
-python MarioMaker_llm_captions.py --dataset %RAW_OUTPUT% --tileset %TILESET% --output %CAPTIONED_OUTPUT% --model %MODEL% --grid-format tokens --tileset-we mm2_tileset_we.json
+python MarioMaker_llm_captions.py --dataset %RAW_OUTPUT% --tileset %TILESET% --output %CAPTIONED_OUTPUT% --model %MODEL% --grid-format tokens --tileset-we mm2_tileset_we.json --ascii-output-dir "%LLM_ASCII_DIR%"
 python split_mario_maker_data.py --json %CAPTIONED_OUTPUT% --seed %SEED%
 python tokenizer.py save --json_file datasets\%GAME%_LevelsAndCaptions-%TYPE%-train.json --pkl_file datasets\%GAME%_Tokenizer-%TYPE%.pkl
 python create_mario_maker_random_captions.py --json %CAPTIONED_OUTPUT% --output datasets\%GAME%_RandomTest-%TYPE%.json

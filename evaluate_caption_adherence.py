@@ -52,13 +52,10 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"     # Save within the model path directory
 
-    # Based on the number of tiles, decides which game to run
-    if args.num_tiles == common_settings.MARIO_TILE_COUNT:
-            tileset = common_settings.MARIO_TILESET
-            height = common_settings.MARIO_HEIGHT
-            width = common_settings.MARIO_WIDTH
-            path_to_json = args.json
-
+    tileset = args.tileset
+    height = args.height
+    width = args.width
+    path_to_json = args.json
 
     if not args.compare_checkpoints:
         args.output_dir = os.path.join(args.model_path, args.output_dir)
@@ -123,11 +120,10 @@ def main():
 
 def track_caption_adherence(args, device, dataloader, id_to_char, char_to_id, tile_descriptors, using_unet_pipe=True):
 
-    if args.num_tiles == common_settings.MARIO_TILE_COUNT:
-            tileset = common_settings.MARIO_TILESET
-            height = common_settings.MARIO_HEIGHT
-            width = common_settings.MARIO_WIDTH
-            path_to_json = args.json
+    tileset = args.tileset
+    height = args.height
+    width = args.width
+    path_to_json = args.json
 
     checkpoint_dirs = [
         (int(d.split("-")[-1]), os.path.join(args.model_path, d))

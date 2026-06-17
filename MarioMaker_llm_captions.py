@@ -603,7 +603,7 @@ def _validate_tileset_match(dataset, id_to_char, tileset_path):
 
 
 def generate_captions(dataset_path, tileset_path, output_path, model, url, timeout, retries,
-                       grid_format="ascii", tileset_we_path=None):
+                       grid_format="ascii", tileset_we_path=None, ascii_output_dir=None):
     with open(dataset_path, "r", encoding="utf-8") as f:
         dataset = json.load(f)
 
@@ -622,6 +622,9 @@ def generate_captions(dataset_path, tileset_path, output_path, model, url, timeo
         dict_string = build_dict_string(tileset_path, char_names)
         grid_label = "ASCII Level"
 
+    if ascii_output_dir:
+        os.makedirs(ascii_output_dir, exist_ok=True)
+
     existing = load_existing(output_path)
     if existing:
         print(f"Resuming: {len(existing)} captions already present in {output_path}")
@@ -638,15 +641,21 @@ def generate_captions(dataset_path, tileset_path, output_path, model, url, timeo
         scene = item["scene"] if isinstance(item, dict) else item
         name = item.get("name", str(i)) if isinstance(item, dict) else str(i)
 
+        if grid_format == "tokens":
+            ascii_grid = scene_to_tokens(scene, id_to_char, char_to_token)
+        else:
+            ascii_grid = scene_to_ascii(scene, id_to_char)
+
+        if ascii_output_dir:
+            safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)
+            with open(os.path.join(ascii_output_dir, f"{safe_name}.txt"), "w", encoding="utf-8") as f:
+                f.write(ascii_grid)
+
         if name in existing:
             results.append(existing[name])
             skipped += 1
             continue
 
-        if grid_format == "tokens":
-            ascii_grid = scene_to_tokens(scene, id_to_char, char_to_token)
-        else:
-            ascii_grid = scene_to_ascii(scene, id_to_char)
         metadata = compute_metadata(scene, id_to_char, char_names, tileset_path)
         prompt = PROMPT_TEMPLATE.format(
             dict_string=dict_string,
@@ -736,6 +745,14 @@ def main():
             "--grid-format tokens. Default: mm2_tileset_we.json"
         ),
     )
+    parser.add_argument(
+        "--ascii-output-dir",
+        default=None,
+        help=(
+            "Optional folder to dump the exact grid text (ascii or token format, "
+            "matching --grid-format) sent to the LLM for each scene, one .txt file per scene."
+        ),
+    )
     args = parser.parse_args()
 
     for path, label in [(args.dataset, "dataset"), (args.tileset, "tileset")]:
@@ -757,6 +774,7 @@ def main():
         args.retries,
         grid_format=args.grid_format,
         tileset_we_path=args.tileset_we,
+        ascii_output_dir=args.ascii_output_dir,
     )
 
 
