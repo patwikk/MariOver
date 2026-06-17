@@ -24,16 +24,16 @@ EXTENDED_CHAR_NAMES = {
     "#": "Ground",
     "B": "Brick",
     "?": "Question Block",
-    "\xa2": "Coin",
+    "c": "Coin",
     "g": "Enemy",
     "K": "Koopa",
     "P": "Piranha Plant",
     "t": "Thwomp",
     "^": "Spike",
     "N": "Block",
-    "\xb3": "Mushroom Platform",
-    "\xb7": "Bridge",
-    "\xb4": "Semisolid Platform",
+    "T": "Mushroom Platform",
+    "=": "Bridge",
+    "k": "Semisolid Platform",
     "S": "Stone",
     "i": "Fire Flower",
     "V": "Cannon",
@@ -514,6 +514,46 @@ def scene_to_tokens(scene, id_to_char, char_to_token):
     )
 
 
+def load_api_key(api_key_path):
+    with open(api_key_path, "r", encoding="utf-8") as f:
+        return f.readline().strip()
+
+
+def call_claude(prompt, model, api_key, max_tokens, timeout, retries):
+    payload = json.dumps({
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": 0,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                parts = result.get("content", [])
+                return "".join(p.get("text", "") for p in parts).strip()
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            if attempt < retries - 1:
+                wait = min(2 ** attempt * 5, 60)
+                print(f"  [RETRY {attempt + 1}/{retries - 1}] {e} (waiting {wait}s)")
+                time.sleep(wait)
+            else:
+                raise RuntimeError(
+                    f"Claude request failed after {retries} attempts: {e}"
+                ) from e
+
+
 def call_ollama(prompt, model, url, timeout, retries):
     payload = json.dumps({
         "model": model,
@@ -603,7 +643,8 @@ def _validate_tileset_match(dataset, id_to_char, tileset_path):
 
 
 def generate_captions(dataset_path, tileset_path, output_path, model, url, timeout, retries,
-                       grid_format="ascii", tileset_we_path=None, ascii_output_dir=None):
+                       grid_format="ascii", tileset_we_path=None, ascii_output_dir=None,
+                       backend="ollama", api_key=None, max_tokens=300):
     with open(dataset_path, "r", encoding="utf-8") as f:
         dataset = json.load(f)
 
@@ -666,7 +707,10 @@ def generate_captions(dataset_path, tileset_path, output_path, model, url, timeo
 
         print(f"[{i + 1}/{total}] {name} ...", end=" ", flush=True)
         try:
-            caption = call_ollama(prompt, model, url, timeout, retries).replace("\n", ". ")
+            if backend == "claude":
+                caption = call_claude(prompt, model, api_key, max_tokens, timeout, retries).replace("\n", ". ")
+            else:
+                caption = call_ollama(prompt, model, url, timeout, retries).replace("\n", ". ")
             print("OK")
         except RuntimeError as e:
             print(f"ERROR: {e}")
@@ -701,12 +745,32 @@ def main():
     )
     parser.add_argument("--output", required=True, help="Output captioned JSON.")
     parser.add_argument(
-        "--model",
-        default="qwen2.5:14b",
+        "--backend",
+        choices=["ollama", "claude"],
+        default="ollama",
+        help="LLM backend to use. Default: ollama",
+    )
+    parser.add_argument(
+        "--api-key-file",
+        default=None,
         help=(
-            "Ollama model name. Default: qwen2.5:14b. "
-            "Pull with: ollama pull qwen2.5:14b. "
-            "Smaller fallback: qwen2.5:7b or llama3.1:8b."
+            "Path to a .txtg file whose first line is the full Claude API key. "
+            "Required when --backend claude."
+        ),
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=300,
+        help="Max output tokens for the Claude backend. Default: 300",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "Model name. For --backend ollama, default: qwen2.5:14b "
+            "(pull with: ollama pull qwen2.5:14b; smaller fallback: qwen2.5:7b or llama3.1:8b). "
+            "For --backend claude, default: claude-sonnet-4-6."
         ),
     )
     parser.add_argument(
@@ -764,17 +828,29 @@ def main():
         print(f"Error: tileset-we not found: {args.tileset_we}")
         sys.exit(1)
 
+    api_key = None
+    if args.backend == "claude":
+        if not args.api_key_file or not os.path.isfile(args.api_key_file):
+            print("Error: --api-key-file (a .txtg file with the API key on its first line) is required for --backend claude")
+            sys.exit(1)
+        api_key = load_api_key(args.api_key_file)
+
+    model = args.model or ("claude-sonnet-4-6" if args.backend == "claude" else "qwen2.5:14b")
+
     generate_captions(
         args.dataset,
         args.tileset,
         args.output,
-        args.model,
+        model,
         args.url,
         args.timeout,
         args.retries,
         grid_format=args.grid_format,
         tileset_we_path=args.tileset_we,
         ascii_output_dir=args.ascii_output_dir,
+        backend=args.backend,
+        api_key=api_key,
+        max_tokens=args.max_tokens,
     )
 
 
