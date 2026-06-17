@@ -479,6 +479,14 @@ def build_ascii_grid(level):
                 # row above it is decorative and gets dropped.
                 for dx in range(w):
                     set_cell(col+dx,row,char)
+            elif obj_name == "Big Coin":
+                # Big Coin is being phased out; represent it as a 2x2 cluster
+                # of regular coins instead of its own glyph.
+                col,row = obj_anchor(obj)
+                coin_char,_,_ = get_meta("Coin")
+                for dx in range(2):
+                    for dy in range(2):
+                        set_cell(col+dx,row+dy,coin_char)
             else:
                 col,row = obj_anchor(obj)
                 w,h = obj_tile_size(obj)

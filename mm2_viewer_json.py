@@ -117,7 +117,7 @@ OBJ_META = {
     # items
     "Coin":                ("c", "#FFD700", CAT_ITEM),
     "Red Coin":            ("$", "#FF2200", CAT_ITEM),
-    "Large Coin":          ("C", "#FFAA00", CAT_ITEM),
+    "Big Coin":            ("£", "#FFAA00", CAT_ITEM),
     "1-Up Mushroom":       ("U", "#00CC00", CAT_ITEM),
     "Fire Flower":         ("i", "#FF5500", CAT_ITEM),
     "Super Star":          ("*", "#FFFF00", CAT_ITEM),
@@ -1119,9 +1119,9 @@ class MM2Viewer(tk.Tk):
         occ = self._get_pixel_occupancy(self.current_idx, lvl, max_tx, max_ty) \
             if _PIL_OK else None
 
-        def set_cell(col, row_game, ch, only_if_blank=False):
+        def set_cell(col, row_game, ch, only_if_blank=False, force=False):
             if 0 <= col < max_tx and 0 <= row_game < max_ty:
-                if occ is not None and not occ[row_game][col]:
+                if not force and occ is not None and not occ[row_game][col]:
                     return  # toost shows nothing here — skip the heuristic ghost
                 r = max_ty - 1 - row_game
                 if only_if_blank and grid[r][col] != " ":
@@ -1172,6 +1172,16 @@ class MM2Viewer(tk.Tk):
                         height = min((run + step - 1) // step, h)
                         for y in range(height):
                             set_cell(col + x, row + y, GROUND_CHAR)
+                    continue
+                if obj_name == "Big Coin":
+                    # Big Coin is being phased out; represent it as a 2x2
+                    # cluster of regular coins instead of its own glyph.
+                    # force=True since toost's actual sprite only occupies a
+                    # single tile, not the 2x2 footprint we want here.
+                    coin_char, _, _ = get_meta("Coin")
+                    for dx in range(2):
+                        for dy in range(2):
+                            set_cell(col + dx, row + dy, coin_char, force=True)
                     continue
                 # Claim the object's full bounding box; occ (toost's actual
                 # rendered pixels) carves out the real silhouette — slope
