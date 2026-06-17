@@ -94,6 +94,7 @@ OBJ_META = {
     "Coin":                ("c", "#FFD700", CAT_ITEM),
     "Red Coin":            ("$", "#FF2200", CAT_ITEM),
     "1-Up Mushroom":       ("U", "#00CC00", CAT_ITEM),
+    "1UP":                 ("U", "#00CC00", CAT_ITEM),  # decoder's actual name for this object
     "Fire Flower":         ("i", "#FF5500", CAT_ITEM),
     "Super Star":          ("*", "#FFFF00", CAT_ITEM),
     "Super Mushroom":      ("M", "#EE2222", CAT_ITEM),
