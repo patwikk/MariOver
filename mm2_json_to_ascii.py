@@ -540,6 +540,13 @@ def build_ascii_grid(level):
                 # cap: full width at top row
                 for dx in range(w):
                     set_cell(col + dx, row + h - 1, char)
+            elif obj_name == "Bridge":
+                col,row = obj_anchor(obj)
+                w,_ = obj_tile_size(obj)
+                # Only the bottom (walkable) row is kept; the rope/chain
+                # row above it is decorative and gets dropped.
+                for dx in range(w):
+                    set_cell(col+dx,row,char)
             else:
                 col,row = obj_anchor(obj)
                 w,h = obj_tile_size(obj)

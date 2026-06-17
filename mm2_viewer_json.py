@@ -1157,6 +1157,12 @@ class MM2Viewer(tk.Tk):
                     char = "/" if right_slope else "\\"
                 col, row = obj_anchor(obj)
                 w, h = obj_tile_size(obj)
+                if obj_name == "Bridge":
+                    # Only the bottom (walkable) row is kept; the rope/chain
+                    # row above it is decorative and gets dropped.
+                    for dx in range(w):
+                        set_cell(col + dx, row, char)
+                    continue
                 # Claim the object's full bounding box; occ (toost's actual
                 # rendered pixels) carves out the real silhouette — slope
                 # diagonals, mushroom-platform caps/stems, etc. fall out for
