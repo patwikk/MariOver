@@ -91,7 +91,6 @@ OBJ_META = {
     # items
     "Coin":                ("c", "#FFD700", CAT_ITEM),
     "Red Coin":            ("$", "#FF2200", CAT_ITEM),
-    "Large Coin":          ("C", "#FFAA00", CAT_ITEM),
     "1-Up Mushroom":       ("U", "#00CC00", CAT_ITEM),
     "Fire Flower":         ("i", "#FF5500", CAT_ITEM),
     "Super Star":          ("*", "#FFFF00", CAT_ITEM),
@@ -108,6 +107,7 @@ OBJ_META = {
     "Power Balloon":       ("Q", "#884488", CAT_ITEM),
     "Super Acorn":         ("Q", "#884488", CAT_ITEM),
     "Super Hammer":        ("¬", "#996622", CAT_ITEM),
+    "Big Coin":            ("£", "#FFAA00", CAT_ITEM),
     "P Switch":            ("S", "#4488FF", CAT_ITEM),
     "POW Block":           ("W", "#3366FF", CAT_ITEM),
     "Spring":              ("J", "#DDDD00", CAT_ITEM),
