@@ -937,6 +937,10 @@ def build_objects(objects, gamestyle=3, consumed_plants=None):
         elif oid == 67:
             entry["dir"] = ONEWAY_DIR_MAP.get((o.get("flag", 0) >> 22) & 0x3, 1)
             entry["rot"] = (entry["dir"] - 1) * 90
+        elif oid == 32:
+            entry["dir"] = BANZAI_DIR_MAP.get((o.get("flag", 0) >> 22) & 0x3, 1)
+            entry["rot"] = (entry["dir"] - 1) * 90
+            entry["scl"] = BANZAI_SCL[entry["dir"]]
         elif oid == 83:
             # Skewer anchors one column right of and one row above the
             # generic centered-bottom cell (col + w//2, row + 1) -- derived
