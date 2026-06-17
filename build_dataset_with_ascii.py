@@ -151,6 +151,26 @@ def parse_source_file(file_path):
 
     return levels
 
+def check_unmapped_chars(rows, tile_to_id, extra_tile):
+    """Count how many characters in rows aren't real keys in the tileset.
+
+    A high ratio almost always means the wrong --tileset was passed for this
+    input (e.g. an MM2-style ascii file run against smb.json), since the
+    converter otherwise silently collapses every unrecognized tile into the
+    same extra/unknown id.
+    """
+    total = 0
+    unmapped = 0
+    unmapped_chars = set()
+    for row in rows:
+        for ch in row:
+            total += 1
+            if ch not in tile_to_id:
+                unmapped += 1
+                unmapped_chars.add(ch)
+    return total, unmapped, unmapped_chars
+
+
 def collect_input_files(input_path):
     p = Path(input_path)
     if p.is_dir():
@@ -187,7 +207,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build dataset from custom tagged text files.")
     parser.add_argument("--input_file", required=True, help="Path to a .txt file or a folder of .txt files.")
     parser.add_argument("--output", required=True, help="Output JSON filename.")
-    parser.add_argument("--tileset", default=os.path.join(HERE, "smb.json"), help="Path to tileset JSON.")
+    parser.add_argument("--tileset", required=True, help="Path to tileset JSON.")
     convert_group = parser.add_mutually_exclusive_group()
     convert_group.add_argument("--convert_to_vglc", action="store_true",
                                help="Convert layout to VGLC structure (ascii_to_vglc.py).")
@@ -238,6 +258,16 @@ def main():
                     if len(rows) > WINDOW_H:
                         rows = rows[-WINDOW_H:]
                     empty_char = default_empty_char
+
+                total_chars, unmapped_chars_count, unmapped_chars = check_unmapped_chars(rows, tile_to_id, extra_tile)
+                if total_chars and unmapped_chars_count / total_chars > 0.2:
+                    print(
+                        f"  [WARNING] {full_name}: {unmapped_chars_count}/{total_chars} chars "
+                        f"({unmapped_chars_count / total_chars:.0%}) not found in "
+                        f"'{os.path.basename(tileset_path)}' and will collapse to the unknown tile. "
+                        f"Unmapped chars: {' '.join(repr(c) for c in sorted(unmapped_chars))}. "
+                        f"You are probably using the wrong --tileset for this input."
+                    )
 
                 if args.sliding_window:
                     scenes = extract_all_windows(rows, tile_to_id, extra_tile=extra_tile, stride=args.stride, empty_char=empty_char)

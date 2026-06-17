@@ -195,6 +195,7 @@ MM2_CHAR_NAMES = {
 
 TERRAIN_CHARS_MM2 = frozenset({"#", "H", "B", "S", "I", "C", "/", "\\"})
 TERRAIN_CHARS_EXT = frozenset({"#", "B", "N", "S"})
+TERRAIN_CHARS_WE = frozenset({"#", "B", "N", "?", "H", "I", "p", "O"})
 
 # ── Prompt template ───────────────────────────────────────────────────────────
 
@@ -375,10 +376,28 @@ def build_id_to_char(tileset_path):
     return {idx: char for idx, char in enumerate(tile_chars)}
 
 
+def derive_char_names(tileset_path):
+    """Build a char->name dict straight from a tileset's own tags.
+
+    Used for tilesets (like mm2_tileset_we.json) that don't have a curated
+    *_CHAR_NAMES dict, since their characters don't line up with MM2_CHAR_NAMES
+    (e.g. "c" = coin here vs. "Clear Pipe" in mm2_tileset_full.json's char set).
+    """
+    with open(tileset_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return {
+        char: tags[-1].replace("-", " ").title()
+        for char, tags in data["tiles"].items()
+        if tags
+    }
+
+
 def get_char_names(tileset_path):
     basename = os.path.basename(tileset_path)
     if "extended_tiles" in basename:
         return EXTENDED_CHAR_NAMES
+    if "tileset_we" in basename:
+        return derive_char_names(tileset_path)
     return MM2_CHAR_NAMES
 
 
@@ -404,7 +423,12 @@ def compute_metadata(scene, id_to_char, char_names, tileset_path):
     ncols = len(grid[0])
 
     basename = os.path.basename(tileset_path)
-    terrain = TERRAIN_CHARS_EXT if "extended" in basename else TERRAIN_CHARS_MM2
+    if "extended_tiles" in basename:
+        terrain = TERRAIN_CHARS_EXT
+    elif "tileset_we" in basename:
+        terrain = TERRAIN_CHARS_WE
+    else:
+        terrain = TERRAIN_CHARS_MM2
 
     parts = []
 
@@ -740,8 +764,11 @@ def main():
     parser.add_argument("--dataset", required=True, help="Input dataset JSON.")
     parser.add_argument(
         "--tileset",
-        default="extended_tiles.json",
-        help="Tileset JSON (extended_tiles.json or mm2_tileset_full.json). Default: extended_tiles.json",
+        default="mm2_tileset_we.json",
+        help=(
+            "Tileset JSON the dataset was built with (mm2_tileset_we.json, "
+            "extended_tiles.json, or mm2_tileset_full.json). Default: mm2_tileset_we.json"
+        ),
     )
     parser.add_argument("--output", required=True, help="Output captioned JSON.")
     parser.add_argument(
