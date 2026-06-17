@@ -204,12 +204,20 @@ You are an expert Mario Maker 2 level describer.
 
 You will receive three inputs:
 1. A symbol dictionary mapping level grid symbols to Mario Maker 2 objects.
-2. Pre-computed level metadata (object tile counts, terrain column heights, floor/ceiling analysis, region boundaries).
+2. Pre-computed level metadata (RAW object tile counts, terrain column heights, floor/ceiling analysis, region boundaries).
 3. A level grid (read top-to-bottom, left-to-right).
 
-Trust the metadata for object counts and terrain heights. Do not re-count tiles from the grid, and never mention a feature that is not backed by the metadata or grid.
+The metadata's object tile counts are raw occupied-cell counts, NOT deduplicated object counts. Many objects are single placed instances that render as a block of several identical cells — counting those cells directly will overcount how many objects are actually there. See MULTI-TILE OBJECTS below for how to interpret these counts and the grid correctly. Trust the metadata for terrain heights. Do not re-count terrain tiles from the grid, and never mention a feature that is not backed by the metadata or grid.
 
 Your output trains a text-to-level diffusion model. The model needs many different human-style ways of describing the same level, so it can recognize a level from a short tag list, a casual sentence, or a detailed paragraph alike.
+
+MULTI-TILE OBJECTS
+
+Many object types occupy more than one grid cell per placed instance, appearing as a contiguous block of identical cells. Treat one contiguous block of the same tile type as ONE object, not one object per cell — unless the block's shape clearly looks like several same-size chunks repeated side by side, in which case count each repeated chunk as its own object.
+
+This applies to (at least): pipes, bullet bill blasters, bridges, lifts, mushroom platforms, semisolid platforms, snake blocks, track blocks, conveyor belts, sprint platforms, half-collision platforms, donut block platforms, clouds, lava lifts, thwomps, angry suns, skewers, goal poles/flagpoles, vines, and fire bars.
+
+If two blocks of the same tile type are not touching, they are separate objects. If you are uncertain whether a block is one object or several placed side by side, use your own knowledge of what sizes/dimensions that object can actually take in the Mario Maker 2 editor to judge the most plausible grouping, rather than guessing blindly. When still in doubt, prefer the more conservative (smaller) count.
 
 WHAT YOU MAY DESCRIBE
 
@@ -274,6 +282,20 @@ def build_id_to_char(tileset_path):
     return {idx: char for idx, char in enumerate(tile_chars)}
 
 
+# Category tags that describe how a tile behaves, not what it is. When
+# picking a display name from a tileset's tag list, the last tag that is
+# NOT one of these is used, since the truly identifying tag (e.g. "pipe")
+# is not always written last (e.g. '|' = ["solid", "pipe", "warp"] would
+# otherwise resolve to "Warp" instead of "Pipe").
+GENERIC_TILE_TAGS = frozenset({
+    "passable", "solid", "empty", "enemy", "damaging", "hazard", "moving",
+    "flying", "boss", "explosive", "projectile", "falling", "slippery",
+    "togglable", "collectable", "power-up", "platform", "vehicle",
+    "style ride", "style power-up", "interactive", "climbable", "shooter",
+    "warp", "decoration", "spawn",
+})
+
+
 def derive_char_names(tileset_path):
     """Build a char->name dict straight from a tileset's own tags.
 
@@ -283,11 +305,14 @@ def derive_char_names(tileset_path):
     """
     with open(tileset_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return {
-        char: tags[-1].replace("-", " ").title()
-        for char, tags in data["tiles"].items()
-        if tags
-    }
+    names = {}
+    for char, tags in data["tiles"].items():
+        if not tags:
+            continue
+        specific = [t for t in tags if t not in GENERIC_TILE_TAGS]
+        chosen = specific[-1] if specific else tags[-1]
+        names[char] = chosen.replace("-", " ").title()
+    return names
 
 
 def get_char_names(tileset_path):
@@ -330,7 +355,8 @@ def compute_metadata(scene, id_to_char, char_names, tileset_path):
 
     parts = []
 
-    # Object tile counts (skip Air and Ground to keep it readable)
+    # Raw occupied-cell counts per tile type (skip Air and Ground). Multi-tile
+    # objects are deduplicated in the prompt, not here — see MULTI-TILE OBJECTS.
     counts = {}
     for row in grid:
         for ch in row:
@@ -340,8 +366,9 @@ def compute_metadata(scene, id_to_char, char_names, tileset_path):
             if not name or name in ("Air", "Ground"):
                 continue
             counts[name] = counts.get(name, 0) + 1
+
     if counts:
-        parts.append("Object tile counts:")
+        parts.append("Object tile counts (raw occupied cells per type, see prompt notes on multi-tile objects):")
         for name, cnt in sorted(counts.items(), key=lambda x: -x[1])[:20]:
             parts.append(f"  {name}: {cnt}")
 
