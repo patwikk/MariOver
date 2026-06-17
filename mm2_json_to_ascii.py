@@ -27,7 +27,7 @@ OBJ_META = {
     "Blinking Block":      ("¤", "#FFAA00", CAT_TERRAIN),
     "Spike Block":         ("Ç", "#AA0000", CAT_TERRAIN),
     "Crate":               ("£", "#B87333", CAT_TERRAIN),
-    "Stone":               ("¶", "#999999", CAT_TERRAIN),
+    "Stone":               ("H", "#888888", CAT_TERRAIN),  # decoder's actual name for Hard Block (id 6); "Stone Block" (id 75) never appears in practice
     "Goal Ground":         ("_", "#00AA00", CAT_TERRAIN),
     "Starting Brick":      ("{", "#C8A050", CAT_TERRAIN),
     "Castle Bridge":       ("·", "#885522", CAT_TERRAIN),
