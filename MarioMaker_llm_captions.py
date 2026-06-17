@@ -200,156 +200,54 @@ TERRAIN_CHARS_WE = frozenset({"#", "B", "N", "?", "H", "I", "p", "O"})
 # ── Prompt template ───────────────────────────────────────────────────────────
 
 PROMPT_TEMPLATE = """\
-You are an expert Mario Maker 2 level captioner.
+You are an expert Mario Maker 2 level describer.
 
 You will receive three inputs:
 1. A symbol dictionary mapping level grid symbols to Mario Maker 2 objects.
-2. Pre-computed level metadata (object tile counts, terrain column heights, floor/ceiling analysis).
+2. Pre-computed level metadata (object tile counts, terrain column heights, floor/ceiling analysis, region boundaries).
 3. A level grid (read top-to-bottom, left-to-right).
 
-Trust the metadata for object counts and terrain heights. Do not re-count tiles from the grid.
+Trust the metadata for object counts and terrain heights. Do not re-count tiles from the grid, and never mention a feature that is not backed by the metadata or grid.
 
-Your output trains a diffusion model. Each phrase must correspond to one concrete, visible structure or feature.
+Your output trains a text-to-level diffusion model. The model needs many different human-style ways of describing the same level, so it can recognize a level from a short tag list, a casual sentence, or a detailed paragraph alike.
+
+WHAT YOU MAY DESCRIBE
+
+Only describe concepts that are actually present in the metadata's object tile counts or terrain analysis, or that you can directly see in the grid using the symbol dictionary. Do not invent features. Concepts you may draw on, when present:
+
+- terrain shape (floor, ceiling, gaps, hills, staircases, slopes, platforms, bridges, walls, pillars, towers, chambers, enclosed rooms, etc.) and its direction (ascending/descending) when relevant
+- region structure (separate sections, dividers, left/center/right layout)
+- block materials (ground, hard block, brick, ice block, note block, stone, etc.) when a structure is clearly made of one recognizable material
+- pipes, doors, warps, and other traversal elements
+- enemies and hazards, ideally with where they are (on the ground, on a platform, on a pipe, in the air, or which part of the level)
+- collectibles and power-ups, ideally with placement
+- rough quantities (one, two, three, a few, several, many) rather than exact tile counts for anything above three
+
+You have free rein over how to organize and phrase this — which features to lead with, how to group them, and how much structural vocabulary to use. You do not need to follow a fixed checklist or priority order; just describe what's actually there in a way a person might.
+
+WHAT TO AVOID
+
+- Do not discuss gameplay, difficulty, quality, fun, or designer intent.
+- Do not address the player or use second person.
+- Do not describe exact coordinates or tile-by-tile detail.
+- Do not mention features that are absent.
+
+YOUR TASK
+
+Write 5 different captions for this same level. All 5 must be accurate, but they must vary WIDELY from each other in length, level of detail, and register, so that together they cover the range of ways a human might describe this level:
+
+- one or two should be terse, tag-like phrases separated by periods (similar to keyword lists), covering only the 2-4 most prominent features
+- one or two should be a plain casual sentence or two, in normal prose, that a person might type quickly
+- one or two should be a more detailed, descriptive paragraph that walks through the level's layout and notable features in order
+
+Across the 5 captions, vary which features get emphasized — they don't all need to mention everything, but none should contradict another or invent something not present. Keep all 5 lowercase except for proper nouns inherent to object names if any.
 
 OUTPUT FORMAT
 
-* Output only the caption, nothing else.
-* Use lowercase only.
-* Write all phrases on a single line separated by periods.
-* The entire output must be one unbroken line with no newlines.
-* Each phrase describes exactly one structure, object group, region, or feature.
-* Phrase length: two to six words each.
-* Never explain your reasoning.
+Output a single JSON array of exactly 5 strings, and nothing else — no markdown fences, no commentary, no keys other than the array itself.
 
-PRIORITY ORDER
-
-1. Terrain topology and floor shape.
-2. Region divisions (gaps, walls, chambers).
-3. Platforms and major mid-air structures.
-4. Pipes, doors, and traversal elements.
-5. Enemies and hazards (always with placement).
-6. Collectibles and power-ups (with placement when prominent).
-
-TERRAIN CLASSES AND DEFINITIONS
-
-Use the most specific matching class. When uncertain, choose the more conservative (smaller, more specific) term.
-
-floor     - continuous ground layer at the bottom
-ceiling   - continuous ground layer at the top
-wall      - vertical column or barrier of solid tiles attached to floor or ceiling
-pillar    - narrow freestanding vertical structure (taller than wide)
-platform  - floating horizontal surface not connected to floor or ceiling
-bridge    - horizontal surface spanning a gap
-staircase - terrain rising or falling in clearly distinct steps; always add ascending or descending
-slope     - terrain rising or falling as a smooth incline without steps; always add ascending or descending
-hill      - small rounded bump in the ground, 2-5 tiles tall at its peak
-plateau   - flat elevated terrain section with steep or near-vertical sides
-tower     - tall freestanding structure (taller than wide, at least 5 tiles tall)
-mountain  - ONLY for terrain that meets ALL THREE conditions: (1) clearly peaked triangular or rounded summit, (2) peak is at least 6 tiles above the surrounding base terrain, AND (3) base is at least 8 columns wide. Verify against the metadata column heights before using this term.
-chamber   - fully or mostly enclosed space formed by terrain
-room      - large enclosed region
-
-CRITICAL - MOUNTAIN VS OTHER TERRAIN
-
-Most rising terrain in Mario Maker 2 is NOT a mountain.
-
-Before using mountain, check the metadata column heights. The heights must show a clear rise-and-fall pattern with a peak at least 6 units above the base and a base spanning 8+ columns.
-
-If rising terrain is stepped, use: ascending staircase
-If rising terrain is smooth, use: ascending slope
-If it is a small bump, use: hill
-If it is flat and elevated, use: plateau
-When in doubt, do NOT use mountain.
-
-DIRECTIONALITY
-
-Always add direction to staircases and slopes:
-  ascending staircase / descending staircase
-  ascending slope / descending slope
-
-SHAPE HIERARCHY
-
-Describe terrain as: shape, then direction, then material, then size, then position.
-  ascending staircase. hard block wall. ice block plateau. descending slope.
-
-MATERIALS
-
-Include material when the structure is primarily one recognizable tile type:
-  ground floor. hard block wall. brick staircase. note block platform. ice block plateau.
-
-OBJECT NAMING
-
-Use the most specific name from the dictionary.
-  Use: one goomba / one koopa troopa / one piranha plant
-  Avoid: one enemy / one hazard / one collectible
-
-MULTI-TILE OBJECTS
-
-Count game objects, not ASCII tiles. A pipe three tiles tall is one pipe.
-
-PLATFORM-TYPE TILES
-
-Several tile types behave like the Mushroom Platform: a contiguous run of these tiles forms ONE platform object, not one object per tile. This applies to (when present in the symbol dictionary): Mushroom Platform, Semisolid Platform, Bridge, Cloud, Snake Block, Track Block, Conveyor Belt, Fast Conveyor Belt, Sprint Platform, Half-Collision Platform, Donut Block Platform, Lava Lift, and Seesaw.
-
-A run of these tiles, however long, is one platform. If the grid shows multiple separate runs of the same tile type, count each run as its own platform.
-  one mushroom platform / two semisolid platforms / one snake block platform left
-
-QUANTITIES
-
-one / two / three / a few (4-5) / several (6-9) / many (10-14) / a ton of (15+)
-
-Use exact numbers only for one, two, or three. For four or more, use "a few", "several", "many", or "a ton of" instead of writing out the precise count — do not write "seven enemies" or "fifteen platform tiles".
-
-Never write "one group of N" or "a cluster of N" — describe the quantity directly: "several enemies" not "one group of several enemies."
-
-POSITION
-
-The metadata includes explicit left/center/right column boundaries for this level. Use those boundaries when assigning position.
-
-Only include a position qualifier when it would genuinely help a reader tell this feature apart from another. Specifically:
-
-USE position when:
-- There are two or more instances of the same structure type that need to be distinguished (e.g., "semisolid platform left" and "semisolid platform right")
-- A feature is clearly confined to one third of the level width (e.g., a gap that occupies only the center third)
-
-DO NOT use position when:
-- There is only one instance of the feature in the level
-- The feature spans most of the level width
-- You are guessing — omit rather than risk a wrong position
-
-Allowed horizontal positions: left / center / right
-Allowed combined positions: upper left / upper center / upper right / lower left / lower center / lower right
-
-Only use "upper" or "lower" when the object is genuinely near the top or bottom third of the level height — not just "above the floor."
-
-At most one position per phrase.
-
-ENEMY PLACEMENT
-
-Always say where enemies are. Priority: (1) support structure, (2) airborne, (3) coarse region.
-  one goomba on ground
-  two koopas on platform
-  one piranha plant on pipe
-  several enemies in air
-
-Coarse region (left/center/right) is only for enemy placement when there are enemies in different regions. Do not add a region if all enemies are in the same area as the floor or platform already described.
-
-COLLECTIBLE PLACEMENT
-
-When collectibles are prominent, describe placement:
-  line of coins over gap / several coins in air / one mushroom on platform
-
-AIRBORNE OBJECTS
-
-Use "in air" only when the object has no visible support below it.
-
-ADDITIONAL RULES
-
-* Describe only features that are present. Never mention absent features.
-* Name structures, not tile arrangements (e.g. "ascending staircase" not "blocks going up to the right").
-* Do not use size adjectives (large, small, big, tall, wide, long, short). Use structure class names and materials instead.
-* Prefer concise captions over exhaustive tile inventories.
-* If a region has no notable features beyond the floor, do not add filler phrases.
+Example shape (do not reuse this content, it is only to show the format):
+["ascending staircase. two goombas. one pipe right.", "a short level with a rising staircase, a couple of goombas, and a pipe near the end.", "the level begins on flat ground before climbing a set of steps toward the right side. two goombas patrol the lower section, and a pipe sits near the far right edge of the level.", "...", "..."]
 
 Symbol dictionary:
 {dict_string}
@@ -362,7 +260,7 @@ Metadata:
 {grid_label}:
 {ascii_grid}
 
-Write the caption. DO NOT INCLUDE ANY NON ENGLISH CHARACTERS."""
+Write the JSON array of 5 captions now. DO NOT INCLUDE ANY NON-ENGLISH CHARACTERS, and do not include anything outside the JSON array."""
 
 
 # ── Core helpers ──────────────────────────────────────────────────────────────
@@ -611,12 +509,46 @@ def call_ollama(prompt, model, url, timeout, retries):
                 ) from e
 
 
+def parse_captions(raw_response):
+    """Parse the LLM's JSON array of 5 captions, with a line-based fallback.
+
+    Returns a list of caption strings (possibly empty if parsing fails entirely).
+    """
+    text = raw_response.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+            return [c.strip() for c in parsed if c.strip()]
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: try to find the first [...] block in the response.
+    start, end = text.find("["), text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        try:
+            parsed = json.loads(text[start:end + 1])
+            if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+                return [c.strip() for c in parsed if c.strip()]
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: treat each non-empty line as its own caption.
+    lines = [ln.strip().lstrip("0123456789.-) ").strip() for ln in text.splitlines()]
+    return [ln for ln in lines if ln]
+
+
 def load_existing(output_path):
     if not os.path.isfile(output_path):
         return {}
     with open(output_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return {item["name"]: item for item in data if "caption" in item}
+    return {item["name"]: item for item in data if "captions" in item or "caption" in item}
 
 
 def _write(output_path, data):
@@ -668,7 +600,7 @@ def _validate_tileset_match(dataset, id_to_char, tileset_path):
 
 def generate_captions(dataset_path, tileset_path, output_path, model, url, timeout, retries,
                        grid_format="ascii", tileset_we_path=None, ascii_output_dir=None,
-                       backend="ollama", api_key=None, max_tokens=300):
+                       backend="ollama", api_key=None, max_tokens=900):
     with open(dataset_path, "r", encoding="utf-8") as f:
         dataset = json.load(f)
 
@@ -730,20 +662,29 @@ def generate_captions(dataset_path, tileset_path, output_path, model, url, timeo
         )
 
         print(f"[{i + 1}/{total}] {name} ...", end=" ", flush=True)
+        captions = []
         try:
             if backend == "claude":
-                caption = call_claude(prompt, model, api_key, max_tokens, timeout, retries).replace("\n", ". ")
+                raw = call_claude(prompt, model, api_key, max_tokens, timeout, retries)
             else:
-                caption = call_ollama(prompt, model, url, timeout, retries).replace("\n", ". ")
-            print("OK")
+                raw = call_ollama(prompt, model, url, timeout, retries)
+            captions = parse_captions(raw)
+            if captions:
+                print(f"OK ({len(captions)} captions)")
+            else:
+                print("ERROR: could not parse any captions from response")
+                errors += 1
         except RuntimeError as e:
             print(f"ERROR: {e}")
-            caption = ""
             errors += 1
 
-        entry = {"name": name, "scene": scene, "caption": caption}
-        if isinstance(item, dict) and "prompt" in item:
-            entry["prompt"] = item["prompt"]
+        deterministic = item.get("prompt") if isinstance(item, dict) else None
+        if deterministic:
+            captions.append(deterministic)
+
+        entry = {"name": name, "scene": scene, "captions": captions}
+        if deterministic:
+            entry["prompt"] = deterministic
         results.append(entry)
         generated += 1
 
@@ -788,8 +729,8 @@ def main():
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=300,
-        help="Max output tokens for the Claude backend. Default: 300",
+        default=900,
+        help="Max output tokens for the Claude backend (5 captions need more room than 1). Default: 900",
     )
     parser.add_argument(
         "--model",

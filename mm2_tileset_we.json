@@ -53,7 +53,6 @@
         "9" : ["enemy", "damaging", "hazard", "moving", "dry bones"],
         "A" : ["enemy", "damaging", "hazard", "moving", "angry sun"],
 
-        "C" : ["passable", "collectable", "coin", "big coin"],
         "U" : ["passable", "collectable", "power-up", "one up"],
         "*" : ["passable", "collectable", "power-up", "star"],
         "M" : ["passable", "collectable", "power-up", "mushroom"],
