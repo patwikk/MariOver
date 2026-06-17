@@ -109,7 +109,7 @@ _MM2_OBJ_NAMES = {
 
 _SKIP_DESCRIPTORS = {"solid", "passable", "moving", "damaging", "hazard", "enemy",
                      "collectable", "platform", "interactive", "decoration", "vehicle",
-                     "flying", "projectile", "boss", "slope", "falling"}
+                     "flying", "projectile", "boss", "slope", "falling", "warp"}
 
 def build_char_to_name(tileset_path):
     """

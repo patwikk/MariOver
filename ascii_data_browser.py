@@ -40,6 +40,7 @@ class TileViewer(tk.Tk):
         self.dataset = []
         self.id_to_char = {}
         self.current_sample_idx = 0
+        self.current_caption_idx = 0
         self.show_ids = tk.BooleanVar(value=False)
         #self.describe_locations = tk.BooleanVar(value=False)
         self.describe_absence = tk.BooleanVar(value=False)
@@ -111,7 +112,9 @@ class TileViewer(tk.Tk):
             return_details=True
         )
         sample['caption'] = caption
+        sample['captions'] = [caption]
         sample['details'] = details
+        self.current_caption_idx = 0
         print(f"New caption: {caption}")
         print(details)
         self.redraw()
@@ -152,6 +155,14 @@ class TileViewer(tk.Tk):
 
         self.canvas = tk.Canvas(self, bg="white", width=self.window_size, height=self.window_size - 100)  # Further reduced height to minimize empty space
         self.canvas.pack(pady=1)  # Reduced padding for tighter vertical spacing
+
+        # Caption navigation (for scenes with multiple captions)
+        caption_nav_frame = tk.Frame(self)
+        caption_nav_frame.pack(pady=2)
+        tk.Button(caption_nav_frame, text="< Caption", command=self.prev_caption).pack(side=tk.LEFT, padx=2)
+        self.caption_index_label = tk.Label(caption_nav_frame, text="Caption 1 / 1")
+        self.caption_index_label.pack(side=tk.LEFT, padx=5)
+        tk.Button(caption_nav_frame, text="Caption >", command=self.next_caption).pack(side=tk.LEFT, padx=2)
 
         # Add Text widget for captions
         self.caption_text = tk.Text(self, height=3, width=int(self.window_size / 8), wrap=tk.WORD)
@@ -307,6 +318,8 @@ class TileViewer(tk.Tk):
     def bind_keys(self):
         self.bind("<Right>", lambda e: self.next_sample())
         self.bind("<Left>", lambda e: self.prev_sample())
+        self.bind("<Up>", lambda e: self.prev_caption())
+        self.bind("<Down>", lambda e: self.next_caption())
 
     def load_files(self):
         dataset_path = filedialog.askopenfilename(title="Select dataset JSON")
@@ -329,15 +342,23 @@ class TileViewer(tk.Tk):
             normalized_dataset = []
             for item in self.dataset:
                 if isinstance(item, list):
-                    normalized_dataset.append({'scene': item, 'caption': ''})
+                    normalized_dataset.append({'scene': item, 'captions': ['']})
                 else:
-                    item.setdefault('caption', '')
+                    # Datasets may store multiple captions per scene under 'captions'
+                    # (see MarioMaker_llm_captions.py); fall back to the singular
+                    # 'caption' field, or an empty placeholder if neither is present.
+                    captions = item.get('captions')
+                    if not captions:
+                        captions = [item.get('caption', '')]
+                    item['captions'] = captions
+                    item.setdefault('caption', captions[0])
                     normalized_dataset.append(item)
             self.dataset = normalized_dataset
 
             _, self.id_to_char, self.char_to_id, self.tile_descriptors = extract_tileset(tileset_path)
             self.color_map = self._build_color_map()
             self.current_sample_idx = 0
+            self.current_caption_idx = 0
             self.redraw()
         except Exception as e:
             print(f"Error loading files: {e}")
@@ -485,7 +506,14 @@ class TileViewer(tk.Tk):
         sample = self.dataset[self.current_sample_idx]
 
         if isinstance(sample, list):
-            sample = {"scene": sample, "caption": "No caption available."}
+            sample = {"scene": sample, "captions": ["No caption available."]}
+
+        # Clamp caption index to the current sample's caption list
+        captions = sample.get('captions') or [sample.get('caption', '')]
+        self.current_caption_idx = max(0, min(self.current_caption_idx, len(captions) - 1))
+        self.caption_index_label.config(
+            text=f"Caption {self.current_caption_idx + 1} / {len(captions)}"
+        )
 
         # Dynamically update tile and canvas size for this scene
         self.update_tile_and_canvas_size(sample['scene'])
@@ -620,7 +648,7 @@ class TileViewer(tk.Tk):
         # Update caption text widget
         self.caption_text.configure(state="normal")
         self.caption_text.delete("1.0", tk.END)
-        caption_text = sample['caption']
+        caption_text = captions[self.current_caption_idx]
         caption_parts = caption_text.split('.')
         for part in caption_parts:
             part = part.strip()
@@ -641,11 +669,13 @@ class TileViewer(tk.Tk):
     def prev_sample(self):
         if self.current_sample_idx > 0:
             self.current_sample_idx -= 1
+            self.current_caption_idx = 0
             self.redraw()
 
     def next_sample(self):
         if self.current_sample_idx < len(self.dataset) - 1:
             self.current_sample_idx += 1
+            self.current_caption_idx = 0
             self.redraw()
 
     def jump_to_sample(self, event=None):
@@ -653,11 +683,28 @@ class TileViewer(tk.Tk):
             idx = int(self.jump_entry.get()) - 1
             if 0 <= idx < len(self.dataset):
                 self.current_sample_idx = idx
+                self.current_caption_idx = 0
                 self.redraw()
             else:
                 print("Index out of range.")
         except ValueError:
             print("Invalid index entered.")
+
+    def prev_caption(self):
+        if not self.dataset:
+            return
+        captions = self.dataset[self.current_sample_idx].get('captions') or ['']
+        if self.current_caption_idx > 0:
+            self.current_caption_idx -= 1
+            self.redraw()
+
+    def next_caption(self):
+        if not self.dataset:
+            return
+        captions = self.dataset[self.current_sample_idx].get('captions') or ['']
+        if self.current_caption_idx < len(captions) - 1:
+            self.current_caption_idx += 1
+            self.redraw()
 
     def add_to_composed_level(self):
         idx = self.current_sample_idx
