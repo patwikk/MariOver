@@ -46,6 +46,7 @@ OBJ_META = {
     "Goomba":              ("g", "#CC6600", CAT_ENEMY),
     "Koopa":               ("K", "#44AA00", CAT_ENEMY),
     "Piranha Plant":       ("P", "#DD2200", CAT_ENEMY),
+    "Piranha Flower":      ("P", "#DD2200", CAT_ENEMY),  # decoder's actual name for this object
     "Hammer Bro":          ("m", "#2244AA", CAT_ENEMY),
     "Thwomp":              ("t", "#6655AA", CAT_ENEMY),
     "Bob-omb":             ("o", "#444444", CAT_ENEMY),
@@ -60,6 +61,7 @@ OBJ_META = {
     "Boo":                 ("u", "#DDDDDD", CAT_ENEMY),
     "Bowser":              ("X", "#BB3300", CAT_ENEMY),
     "Bowser Jr.":          ("x", "#CC5511", CAT_ENEMY),
+    "Bowser Jr":           ("x", "#CC5511", CAT_ENEMY),  # decoder's actual name (no period)
     "Chain Chomp":         ("@", "#333333", CAT_ENEMY),
     "Cheep Cheep":         ("~", "#FF4488", CAT_ENEMY),
     "Blooper":             ("q", "#DDDDDD", CAT_ENEMY),
@@ -110,6 +112,7 @@ OBJ_META = {
     "Big Coin":            ("£", "#FFAA00", CAT_ITEM),
     "P Switch":            ("S", "#4488FF", CAT_ITEM),
     "POW Block":           ("W", "#3366FF", CAT_ITEM),
+    "POW":                 ("W", "#3366FF", CAT_ITEM),  # decoder's actual name (no "Block")
     "Spring":              ("J", "#DDDD00", CAT_ITEM),
     # Style Ride (id 45) gamestyle variants — see resolve_obj_name()
     "Goomba's Shoe":       ("z", "#CC6600", CAT_ITEM),
@@ -152,6 +155,7 @@ OBJ_META = {
     "Water Marker":        ("Î", "#0055FF", CAT_DECO),
     "Arrow":               ("Ï", "#FFFF00", CAT_DECO),
     "One-Way Wall":        ("]", "#FFFF88", CAT_DECO),
+    "One-Way":             ("]", "#FFFF88", CAT_DECO),  # decoder's actual name (no "Wall")
     "Reel Camera":         ("Ñ", "#AAAAAA", CAT_DECO),
     "Sound Effect":        ("Ò", "#FFAAFF", CAT_DECO),
     # other
@@ -209,11 +213,11 @@ STYLE_POWERUP_NAMES = {
     },
 }
 
-# Style Ride: objects.id 45 ("Goomba's Shoe") is decoded with a fixed
-# SMB1/SMB3 name, but in SMW/NSMBU the same slot is a Yoshi's Egg that
-# hatches into a rideable Yoshi. See mm2_json_field_dictionary.txt §6.
+# Style Ride: objects.id 45 (decoded by the level parser as "Shoe Goomba")
+# is a fixed SMB1/SMB3 name, but in SMW/NSMBU the same slot is a Yoshi's Egg
+# that hatches into a rideable Yoshi. See mm2_json_field_dictionary.txt §6.
 STYLE_RIDE_NAMES = {
-    "Goomba's Shoe": {    # Slot (id 45)
+    "Shoe Goomba": {    # Slot (id 45) — decoder's actual name for this object
         12621: "Goomba's Shoe",  # SMB1
         13133: "Goomba's Shoe",  # SMB3
         22349: "Yoshi's Egg",    # SMW
