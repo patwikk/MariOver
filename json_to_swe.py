@@ -347,6 +347,24 @@ SKEWER_ROT = {1: 0, 3: 180}
 # dir=1 (face-down, the standard orientation) is used as a constant.
 THWOMP_DIR = 1
 
+# obj_oneway_res requires a 1-4 `direct_t` value (1/2/3/4 = right/top/
+# left/bottom in the source's switch statement); the SWE S4 JSON has no
+# literal "direct_t" key -- the loader derives it from the generic "dir"
+# field instead. dir=0, the generic S4 default used for every other object,
+# is NOT a valid case in that switch (no default case), so a One-Way Wall
+# left at dir=0 becomes permanently invisible on entering play mode -- it's
+# hidden (visible=false) and never replaced. MM2 encodes the 4 facings in
+# flag bits 22-23 ((flag>>22)&0x3), confirmed to take exactly 4 distinct
+# values across the dataset; this maps them 1:1 onto direct_t (raw
+# 0/1/2/3 -> dir 1/2/3/4). Confirmed end-to-end against 4 hand-placed
+# reference saves, one per direction ("one way functional (right).swe",
+# "one way dir up/left/down.swe"): dir 1/2/3/4 = right/up/left/down exactly
+# as mapped. Each reference also carries a `rot` value of 0/810/540/270
+# respectively (== 0/90/180/270 mod 360, i.e. rot = (dir-1)*90) -- the S4
+# entry needs this set too, or the gate may render facing the editor's
+# default orientation instead of the rotated one.
+ONEWAY_DIR_MAP = {0: 1, 1: 2, 2: 3, 3: 4}
+
 # ON/OFF Block (99) / Dotted-Line Block (100) -> SWE S4 "ID", keyed by MM2
 # flag bit 2 (flag & 4), a shared red/blue "color" flag for both ids.
 # Verified exhaustively against "3000209_6 but right.swe": all 73 id-99/100
@@ -443,24 +461,31 @@ OBJ_H_ANCHOR_TOP_IDS = {12, 32, 71}
 # SMMWE represents big form as separate "_b_res" objects rather than scaling.
 # BIG_OBJ_ID_MAP maps the regular SWE ID to its big counterpart; BIG_Y_OFFSET
 # is an extra upward yy shift (in px) to keep the bigger sprite grounded at
-# the same tile row. Verified: goomba=PX (1 tile, 1->2 tile tall), chomp=2*PX
-# (2 tiles, chain anchor rises higher). Unverified enemies default to PX.
+# the same tile row.
+#
+# Only goomba/chomp/koopa/hammerbro are confirmed (in-game tested) to have a
+# working big variant in SMMWE. Every other enemy that can be made "big" in
+# MM2 was tested directly in the SMMWE editor and either has no big-form
+# option at all, or has one that doesn't actually work in the engine -- in
+# both cases there is no usable "_b_res" resource to substitute. The earlier
+# version of this map guessed "_b_res" names for all of these (Thwomp/Monty
+# Mole/Bowser/Piranha Plant/etc.) by analogy; that guess was the cause of
+# three independently-reported crashing levels, since instance_create on an
+# unresolved asset name crashes GameMaker on entering play mode (the same
+# failure mode as the missing-dph crashes elsewhere in this file). Enemies
+# not in this map keep their normal (small) sprite when big-flagged, which
+# is wrong cosmetically but cannot crash the engine.
 BIG_ENEMY_FLAG = 1 << 14
 BIG_OBJ_ID_MAP = {
-    "obj_goomba_res":    "obj_goomba_b_res",
-    "obj_koopa_res":     "obj_koopa_b_res",
-    "obj_pplant_res":    "obj_pplant_b_res",
-    "obj_hammerbro_res": "obj_hammerbro_b_res",
-    "obj_thwomp_res":    "obj_thwomp_b_res",
-    "obj_spiny_res":     "obj_spiny_b_res",
-    "obj_magikoopa_res": "obj_magikoopa_b_res",
-    "obj_blooper_res":   "obj_blooper_b_res",
-    "obj_rocky_res":     "obj_rocky_b_res",
-    "obj_chomp_res":     "obj_chomp_b_res",
-    "obj_bowser_res":    "obj_bowser_b_res",
-    "obj_boomboom_res":  "obj_boomboom_b_res",
-    "obj_bowserjr_res":  "obj_bowserjr_b_res",
-    "obj_monty_res":     "obj_monty_b_res",
+    "obj_goomba_res":    "obj_goomba_b_res",     # verified
+    "obj_chomp_res":     "obj_chomp_b_res",      # verified
+    "obj_koopa_res":     "obj_koopa_b_res",      # verified
+    "obj_hammerbro_res": "obj_hammerbro_b_res",  # verified
+    # Confirmed NOT to have a working big variant in SMMWE (no option, or
+    # broken in-engine) -- do not re-add without re-testing:
+    # obj_pplant_res, obj_thwomp_res, obj_spiny_res, obj_magikoopa_res,
+    # obj_blooper_res, obj_rocky_res, obj_bowser_res, obj_boomboom_res,
+    # obj_bowserjr_res, obj_monty_res
 }
 BIG_Y_OFFSET = {
     "obj_goomba_res": PX,       # verified: big goomba 1 tile taller
@@ -890,6 +915,9 @@ def build_objects(objects, gamestyle=3, consumed_plants=None):
         })
         if oid == 12:
             entry["dir"] = THWOMP_DIR
+        elif oid == 67:
+            entry["dir"] = ONEWAY_DIR_MAP.get((o.get("flag", 0) >> 22) & 0x3, 1)
+            entry["rot"] = (entry["dir"] - 1) * 90
         elif oid == 83:
             # Skewer anchors one column right of and one row above the
             # generic centered-bottom cell (col + w//2, row + 1) -- derived
